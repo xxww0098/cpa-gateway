@@ -14,6 +14,7 @@ import (
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 const (
@@ -87,6 +88,7 @@ func (e *ClaudeExecutor) Identifier() string {
 
 func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	credential, baseURL := e.resolveCredentials(auth)
+	startedAt := time.Now().UTC()
 	resp, err := e.doMessagesRequest(ctx, req, opts, credential, baseURL)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -104,7 +106,13 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 			"status_code": resp.StatusCode,
 		},
 	}
-	if resp.StatusCode >= http.StatusBadRequest {
+	failed := resp.StatusCode >= http.StatusBadRequest
+	tokens, ok := ParseClaudeUsage(payload)
+	if ok {
+		wrapped.Metadata["usage"] = tokens
+	}
+	e.publishUsage(ctx, auth, req, opts, tokens, ok, failed, resp.StatusCode, payload, startedAt)
+	if failed {
 		return wrapped, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 	return wrapped, nil
@@ -114,6 +122,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	credential, baseURL := e.resolveCredentials(auth)
 	streamOpts := opts
 	streamOpts.Stream = true
+	startedAt := time.Now().UTC()
 	resp, err := e.doMessagesRequest(ctx, req, streamOpts, credential, baseURL)
 	if err != nil {
 		return nil, err
@@ -121,6 +130,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(resp.Body)
+		e.publishUsage(ctx, auth, req, streamOpts, UsageTokens{}, false, true, resp.StatusCode, payload, startedAt)
 		return nil, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 
@@ -129,23 +139,30 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		defer close(chunks)
 		defer resp.Body.Close()
 
+		var accumulator bytes.Buffer
+		var streamErr error
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
+				accumulator.Write(payload)
 				select {
 				case <-ctx.Done():
-					chunks <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
+					streamErr = ctx.Err()
+					chunks <- cliproxyexecutor.StreamChunk{Err: streamErr}
+					e.publishStreamUsage(ctx, auth, req, streamOpts, accumulator.Bytes(), true, 0, startedAt)
 					return
 				case chunks <- cliproxyexecutor.StreamChunk{Payload: payload}:
 				}
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
+					streamErr = err
 					chunks <- cliproxyexecutor.StreamChunk{Err: err}
 				}
+				e.publishStreamUsage(ctx, auth, req, streamOpts, accumulator.Bytes(), streamErr != nil, resp.StatusCode, startedAt)
 				return
 			}
 		}
@@ -395,4 +412,135 @@ func (e *ClaudeExecutor) messagesEndpoint(query url.Values, baseURL string) (str
 		parsed.RawQuery = values.Encode()
 	}
 	return parsed.String(), nil
+}
+
+// claudeRequestedModel resolves the upstream-facing model name for a request.
+// It prefers the translated Request.Model and falls back to the
+// `requested_model` hint stored by the SDK router on either Request or
+// Options metadata.
+func claudeRequestedModel(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) string {
+	if strings.TrimSpace(req.Model) != "" {
+		return strings.TrimSpace(req.Model)
+	}
+	if value := stringFromMap(req.Metadata, cliproxyexecutor.RequestedModelMetadataKey); value != "" {
+		return value
+	}
+	return stringFromMap(opts.Metadata, cliproxyexecutor.RequestedModelMetadataKey)
+}
+
+// publishUsage emits a usage.Record to the SDK default manager. Claude
+// surfaces usage via the `usage` envelope on non-stream responses and via
+// `message_start.message.usage` + `message_delta.usage` on SSE streams;
+// ParseClaudeUsage already normalizes both shapes into UsageTokens. When
+// parsing fails the record is still published with zero Detail so downstream
+// UsagePlugin can fall back to heuristic accounting.
+func (e *ClaudeExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+	rec := cliproxyusage.Record{
+		Provider:    providerClaude,
+		Model:       claudeRequestedModel(req, opts),
+		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
+		Source:      providerClaude,
+		RequestedAt: startedAt,
+		Latency:     time.Since(startedAt),
+		Failed:      failed,
+	}
+	if auth != nil {
+		rec.AuthID = auth.ID
+		rec.AuthIndex = auth.Index
+		rec.AuthType = auth.Provider
+	}
+	if parsed {
+		rec.Detail = cliproxyusage.Detail{
+			InputTokens:     tokens.Input,
+			OutputTokens:    tokens.Output,
+			ReasoningTokens: tokens.Reasoning,
+			CachedTokens:    tokens.Cached,
+			TotalTokens:     tokens.Input + tokens.Output,
+		}
+	}
+	if failed {
+		rec.Fail = cliproxyusage.Failure{
+			StatusCode: status,
+			Body:       truncateClaudeFailureBody(payload),
+		}
+	}
+	cliproxyusage.PublishRecord(ctx, rec)
+}
+
+// publishStreamUsage parses the accumulated SSE body and delegates to
+// publishUsage. Claude streams the following frames:
+//
+//	event: message_start
+//	data: {"type":"message_start","message":{"usage":{"input_tokens":N,...}}}
+//
+//	event: message_delta
+//	data: {"type":"message_delta","delta":{...},"usage":{"output_tokens":M,...}}
+//
+//	event: message_stop
+//	data: {"type":"message_stop"}
+//
+// The last message_delta event carries the final output_tokens total, so we
+// scan all `data:` events and keep the last parse that yields any usage
+// values. ParseClaudeUsage's per-event merge handles input / output / cache
+// fields correctly regardless of which frame was last.
+func (e *ClaudeExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, body []byte, failed bool, status int, startedAt time.Time) {
+	tokens, ok := UsageTokens{}, false
+	if len(body) > 0 {
+		tokens, ok = parseClaudeStreamUsage(body)
+	}
+	e.publishUsage(ctx, auth, req, opts, tokens, ok, failed, status, nil, startedAt)
+}
+
+// parseClaudeStreamUsage walks an Anthropic SSE stream buffer, extracts the
+// `data: {json}` payloads, and merges usage across events so the final record
+// carries the largest observed input_tokens + output_tokens + cache token
+// totals. Non-SSE (plain JSON) bodies are tolerated via a fast path.
+func parseClaudeStreamUsage(body []byte) (UsageTokens, bool) {
+	// Fast path: plain JSON body with top-level `usage` / `message`.
+	if tokens, ok := ParseClaudeUsage(body); ok {
+		return tokens, true
+	}
+
+	var (
+		merged UsageTokens
+		got    bool
+	)
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(trimmed[len("data:"):])
+		if len(payload) == 0 {
+			continue
+		}
+		tokens, ok := ParseClaudeUsage(payload)
+		if !ok {
+			continue
+		}
+		if tokens.Input > merged.Input {
+			merged.Input = tokens.Input
+		}
+		if tokens.Output > merged.Output {
+			merged.Output = tokens.Output
+		}
+		if tokens.Reasoning > merged.Reasoning {
+			merged.Reasoning = tokens.Reasoning
+		}
+		if tokens.Cached > merged.Cached {
+			merged.Cached = tokens.Cached
+		}
+		got = true
+	}
+	return merged, got
+}
+
+// truncateClaudeFailureBody clips the failure payload so usage.Record.Fail.Body
+// stays bounded. 4 KiB is more than enough for provider error envelopes.
+func truncateClaudeFailureBody(payload []byte) string {
+	const max = 4 * 1024
+	if len(payload) <= max {
+		return string(payload)
+	}
+	return string(payload[:max])
 }
