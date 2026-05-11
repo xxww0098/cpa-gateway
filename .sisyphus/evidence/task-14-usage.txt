@@ -1,0 +1,92 @@
+Task 14 — sdk/usage.go + sdk/interfaces.go (TDD)
+================================================
+
+Artifacts
+---------
+  sdk/interfaces.go    BillingLedger + PricingCalculator interfaces
+  sdk/usage_test.go    5 tests, mock ledger + mock calc
+  sdk/usage.go         UsagePlugin.HandleUsage reads SettleCtx from ctx
+
+Acceptance criteria
+-------------------
+[x] sdk/interfaces.go defines BillingLedger + PricingCalculator
+[x] sdk/usage_test.go has 5 tests, all PASS
+[x] go test ./sdk/ -run TestHandleUsage -v PASS
+[x] go build ./... exit 0
+
+
+RED phase
+---------
+  $ go test ./sdk/ -run TestHandleUsage -v -count=1
+
+Output (trimmed):
+  # github.com/xxww0098/cpa-gateway/sdk [sdk.test]
+  sdk/usage_test.go:160:12: undefined: NewUsagePlugin
+  sdk/usage_test.go:237:12: undefined: NewUsagePlugin
+  sdk/usage_test.go:306:12: undefined: NewUsagePlugin
+  sdk/usage_test.go:361:12: undefined: NewUsagePlugin
+  sdk/usage_test.go:410:12: undefined: NewUsagePlugin
+  FAIL    github.com/xxww0098/cpa-gateway/sdk [build failed]
+
+→ confirmed RED
+
+
+GREEN phase (after writing sdk/usage.go)
+----------------------------------------
+  $ go test ./sdk/ -run TestHandleUsage -v -count=1
+  === RUN   TestHandleUsage_SettleSuccess       --- PASS (0.00s)
+  === RUN   TestHandleUsage_Failed              --- PASS (0.00s)
+  === RUN   TestHandleUsage_WithSubscription    --- PASS (0.00s)
+  === RUN   TestHandleUsage_NoSettleCtx         --- PASS (0.00s)
+  === RUN   TestHandleUsage_ZeroTokens          --- PASS (0.00s)
+  PASS
+  ok  github.com/xxww0098/cpa-gateway/sdk  0.625s
+
+→ 5/5 PASS
+
+
+Full sdk/ test suite (post Task 12 landing holdmw.go)
+-----------------------------------------------------
+  $ go test ./sdk/ -count=1 -v
+  === RUN   TestAuthenticate_APIKey                 --- PASS
+  === RUN   TestAuthenticate_JWT                    --- PASS
+  === RUN   TestAuthenticate_MissingToken           --- PASS
+  === RUN   TestAuthenticate_InvalidKey             --- PASS
+  === RUN   TestAuthenticate_SubscriptionLoaded     --- PASS
+  === RUN   TestHold_SufficientBalance              --- PASS
+  === RUN   TestHold_InsufficientBalance            --- PASS
+  === RUN   TestHold_SubscriptionDailyQuotaExceeded --- PASS
+  === RUN   TestHold_SubscriptionQuotaReset         --- PASS
+  === RUN   TestHold_ReleaseOnUpstreamError         --- PASS
+  === RUN   TestHold_NonV1Path                      --- PASS
+  === RUN   TestHandleUsage_SettleSuccess           --- PASS
+  === RUN   TestHandleUsage_Failed                  --- PASS
+  === RUN   TestHandleUsage_WithSubscription        --- PASS
+  === RUN   TestHandleUsage_NoSettleCtx             --- PASS
+  === RUN   TestHandleUsage_ZeroTokens              --- PASS
+  PASS
+  ok  github.com/xxww0098/cpa-gateway/sdk  0.388s
+
+→ 16/16 PASS across Task 11 + 12 + 14.
+
+
+Build verification
+------------------
+  $ go build ./...     exit 0
+  $ go vet ./sdk/...   exit 0
+
+
+Parallel Task 12 coordination
+-----------------------------
+- Task 12 (sdk/holdmw.go + sdk/holdmw_test.go) ran in parallel.
+- Task 12 had NOT yet created sdk/interfaces.go when Task 14 began.
+  Task 14 is the source of sdk/interfaces.go. The BillingLedger and
+  PricingCalculator interfaces defined here match the method set that
+  Task 12's holdLedgerMock / holdCalcMock already implement, so the
+  combined package compiles cleanly with both test suites present.
+- Task 14 artifacts committed separately from Task 12's artifacts.
+
+
+Commit
+------
+  feat: add sdk/usage.go (usage.Plugin from ctx SettleCtx) + sdk/interfaces.go
