@@ -1,0 +1,17 @@
+=== go build ./... ===
+EXIT=0
+
+=== grep reset fields ===
+model/subscription.go
+
+=== model/ non-stdlib imports ===
+CLEAN
+
+=== ls model/ ===
+billing.go
+catalog.go
+doc.go
+sdk.go
+subscription.go
+ticket.go
+user.go

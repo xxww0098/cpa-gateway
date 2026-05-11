@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -307,7 +308,7 @@ func UserRefundApplyHandler(c *gin.Context) {
 		return
 	}
 	// Verify the subscription belongs to the authenticated user.
-	var sub Subscription
+	var sub model.Subscription
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", req.SubscriptionID, bc.UserID).First(&sub).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			Error(c, http.StatusNotFound, apiErrorNotFound, "subscription not found")
@@ -504,7 +505,7 @@ func AdminListPricingGroupsHandler(c *gin.Context) {
 	if !requireAdmin(c) {
 		return
 	}
-	var groups []Group
+	var groups []model.Group
 	if err := GlobalDB.WithContext(c.Request.Context()).Order("name ASC").Find(&groups).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
 		return
@@ -529,7 +530,7 @@ func AdminUpsertPricingGroupHandler(c *gin.Context) {
 		return
 	}
 	name := strings.TrimSpace(req.GroupName)
-	var g Group
+	var g model.Group
 	err := GlobalDB.WithContext(c.Request.Context()).Where("name = ?", name).First(&g).Error
 	if err == nil {
 		if e := GlobalDB.WithContext(c.Request.Context()).Model(&g).Update("rate_multiplier", req.DiscountRate).Error; e != nil {
@@ -539,7 +540,7 @@ func AdminUpsertPricingGroupHandler(c *gin.Context) {
 		Success(c, gin.H{"group_name": name, "discount_rate": req.DiscountRate})
 		return
 	}
-	g = Group{Name: name, RateMultiplier: req.DiscountRate}
+	g = model.Group{Name: name, RateMultiplier: req.DiscountRate}
 	if e := GlobalDB.WithContext(c.Request.Context()).Create(&g).Error; e != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create group")
 		return
@@ -556,7 +557,7 @@ func AdminDeletePricingGroupHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid group name")
 		return
 	}
-	res := GlobalDB.WithContext(c.Request.Context()).Where("name = ?", name).Delete(&Group{})
+	res := GlobalDB.WithContext(c.Request.Context()).Where("name = ?", name).Delete(&model.Group{})
 	if res.Error != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to delete group")
 		return
@@ -785,14 +786,14 @@ func AdminUsageLogsHandler(c *gin.Context) {
 	page := queryInt(c, "page", 1, 1, 1000000)
 	pageSize := queryInt(c, "page_size", 30, 1, 100)
 	offset := (page - 1) * pageSize
-	model := strings.TrimSpace(c.Query("model"))
+	modelQuery := strings.TrimSpace(c.Query("model"))
 	status := strings.TrimSpace(c.Query("status"))
 	startDate := strings.TrimSpace(c.Query("start_date"))
 	endDate := strings.TrimSpace(c.Query("end_date"))
 
-	base := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{})
-	if model != "" {
-		base = base.Where("model = ?", model)
+	base := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{})
+	if modelQuery != "" {
+		base = base.Where("model = ?", modelQuery)
 	}
 	if status != "" {
 		if status == "success" {
@@ -814,7 +815,7 @@ func AdminUsageLogsHandler(c *gin.Context) {
 		return
 	}
 
-	var rows []UsageLog
+	var rows []model.UsageLog
 	if err := base.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&rows).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list usage logs")
 		return
@@ -858,7 +859,7 @@ func AdminModelCatalogModelsURLGetHandler(c *gin.Context) {
 		Success(c, gin.H{"models_url": ""})
 		return
 	}
-	var entry ModelCatalogEntry
+	var entry model.ModelCatalogEntry
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND models_url <> ''", channelKey).First(&entry).Error; err != nil {
 		Success(c, gin.H{"models_url": ""})
 		return
@@ -878,7 +879,7 @@ func AdminModelCatalogModelsURLPutHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid models url payload")
 		return
 	}
-	entry := ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: "__models_url__", Visible: false, ModelsURL: strings.TrimSpace(req.ModelsURL)}
+	entry := model.ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: "__models_url__", Visible: false, ModelsURL: strings.TrimSpace(req.ModelsURL)}
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).Assign(entry).FirstOrCreate(&entry).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save models url")
 		return
@@ -904,7 +905,7 @@ func AdminModelCatalogEnsureOpenAIChannelHandler(c *gin.Context) {
 		if modelID == "" {
 			continue
 		}
-		entry := ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: modelID, Visible: true}
+		entry := model.ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: modelID, Visible: true}
 		res := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).FirstOrCreate(&entry)
 		if res.Error != nil {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to ensure model catalog")
@@ -930,7 +931,7 @@ func AdminModelCatalogOpenAIVisibilityHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid visibility payload")
 		return
 	}
-	entry := ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: strings.TrimSpace(req.ModelID), Visible: req.Visible}
+	entry := model.ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: strings.TrimSpace(req.ModelID), Visible: req.Visible}
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).Assign(map[string]any{"visible": req.Visible}).FirstOrCreate(&entry).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save visibility")
 		return
@@ -953,7 +954,7 @@ func AdminUpsertPricingModelHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid model price payload")
 		return
 	}
-	price := ModelPrice{ModelID: strings.TrimSpace(req.ModelID), InputPricePer1M: req.InputPricePer1M, OutputPricePer1M: req.OutputPricePer1M, CachedInputPricePer1M: req.CachedInputPricePer1M, ReasoningPricePer1M: req.ReasoningPricePer1M}
+	price := model.ModelPrice{ModelID: strings.TrimSpace(req.ModelID), InputPricePer1M: req.InputPricePer1M, OutputPricePer1M: req.OutputPricePer1M, CachedInputPricePer1M: req.CachedInputPricePer1M, ReasoningPricePer1M: req.ReasoningPricePer1M}
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("model_id = ?", price.ModelID).Assign(price).FirstOrCreate(&price).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save model price")
 		return

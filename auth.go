@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -122,7 +123,7 @@ func APIKeyPrefix(plaintext string) string {
 // Returns the plaintext key (shown only once) and an error if generation fails.
 // The key format is: cpa- + 64 hex characters (total 68 chars).
 // The SHA-256 hash of the plaintext is stored in the database.
-func GenerateAPIKey(userID uint, name string, groupID *uint) (string, *ApiKey, error) {
+func GenerateAPIKey(userID uint, name string, groupID *uint) (string, *model.ApiKey, error) {
 	if GlobalDB == nil {
 		return "", nil, errors.New("database not initialized")
 	}
@@ -140,7 +141,7 @@ func GenerateAPIKey(userID uint, name string, groupID *uint) (string, *ApiKey, e
 	keyHash := hex.EncodeToString(hash[:])
 
 	// Create the API key record
-	apiKey := ApiKey{
+	apiKey := model.ApiKey{
 		UserID:     userID,
 		KeyHash:    keyHash,
 		KeyPrefix:  APIKeyPrefix(plaintext),
@@ -180,7 +181,7 @@ func ValidateAPIKey(plaintext string) (*CachedKey, error) {
 		return nil, errors.New("database not initialized")
 	}
 
-	var apiKey ApiKey
+	var apiKey model.ApiKey
 	if err := GlobalDB.Where("key_hash = ? AND status = ?", keyHash, "active").First(&apiKey).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("invalid API key")
@@ -191,7 +192,7 @@ func ValidateAPIKey(plaintext string) (*CachedKey, error) {
 	// Get rate multiplier from group if set
 	rateMult := 1.0
 	if apiKey.GroupID != nil {
-		var group Group
+		var group model.Group
 		if err := GlobalDB.First(&group, *apiKey.GroupID).Error; err == nil {
 			rateMult = group.RateMultiplier
 		}
@@ -215,7 +216,7 @@ func ValidateAPIKey(plaintext string) (*CachedKey, error) {
 		if db := GlobalDB; db != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			db.WithContext(ctx).Model(&ApiKey{}).Where("id = ?", apiKey.ID).Update("last_used_at", time.Now())
+			db.WithContext(ctx).Model(&model.ApiKey{}).Where("id = ?", apiKey.ID).Update("last_used_at", time.Now())
 		}
 	}()
 

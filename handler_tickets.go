@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -22,7 +23,7 @@ func UserListTicketsHandler(c *gin.Context) {
 	pageSize := queryInt(c, "page_size", 20, 1, 100)
 	status := strings.TrimSpace(c.Query("status"))
 
-	q := GlobalDB.WithContext(c.Request.Context()).Model(&Ticket{}).Where("user_id = ?", bc.UserID)
+	q := GlobalDB.WithContext(c.Request.Context()).Model(&model.Ticket{}).Where("user_id = ?", bc.UserID)
 	if status != "" && status != "all" {
 		q = q.Where("status = ?", status)
 	}
@@ -31,7 +32,7 @@ func UserListTicketsHandler(c *gin.Context) {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count tickets")
 		return
 	}
-	var rows []Ticket
+	var rows []model.Ticket
 	if err := q.Order("updated_at DESC, id DESC").Limit(pageSize).Offset((page - 1) * pageSize).Find(&rows).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list tickets")
 		return
@@ -58,12 +59,12 @@ func UserCreateTicketHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid ticket payload")
 		return
 	}
-	ticket := Ticket{UserID: bc.UserID, Title: firstNonEmpty(req.Title, "在线咨询"), Category: firstNonEmpty(req.Category, "other"), Priority: firstNonEmpty(req.Priority, "medium"), Status: "open"}
+	ticket := model.Ticket{UserID: bc.UserID, Title: firstNonEmpty(req.Title, "在线咨询"), Category: firstNonEmpty(req.Category, "other"), Priority: firstNonEmpty(req.Priority, "medium"), Status: "open"}
 	err := GlobalDB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&ticket).Error; err != nil {
 			return err
 		}
-		return tx.Create(&TicketReply{TicketID: ticket.ID, UserID: bc.UserID, Content: strings.TrimSpace(req.Content)}).Error
+		return tx.Create(&model.TicketReply{TicketID: ticket.ID, UserID: bc.UserID, Content: strings.TrimSpace(req.Content)}).Error
 	})
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create ticket")
@@ -136,11 +137,11 @@ func AdminListTicketsHandler(c *gin.Context) {
 	page := queryInt(c, "page", 1, 1, 1000000)
 	pageSize := queryInt(c, "page_size", 20, 1, 100)
 	status := strings.TrimSpace(c.Query("status"))
-	q := GlobalDB.WithContext(c.Request.Context()).Model(&Ticket{})
+	q := GlobalDB.WithContext(c.Request.Context()).Model(&model.Ticket{})
 	if status != "" && status != "all" { q = q.Where("status = ?", status) }
 	var total int64
 	if err := q.Count(&total).Error; err != nil { Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count tickets"); return }
-	var rows []Ticket
+	var rows []model.Ticket
 	if err := q.Order("updated_at DESC, id DESC").Limit(pageSize).Offset((page-1)*pageSize).Find(&rows).Error; err != nil { Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list tickets"); return }
 	items := make([]gin.H, 0, len(rows))
 	for _, t := range rows { items = append(items, ticketPayload(t, "")) }
@@ -195,41 +196,41 @@ func AdminTicketQuickRepliesSaveHandler(c *gin.Context) {
 	Success(c, gin.H{"ok": true})
 }
 
-func loadUserTicket(c *gin.Context, userID uint) (Ticket, bool) {
+func loadUserTicket(c *gin.Context, userID uint) (model.Ticket, bool) {
 	ticket, ok := loadAnyTicket(c)
-	if !ok { return Ticket{}, false }
-	if ticket.UserID != userID { Error(c, http.StatusNotFound, apiErrorNotFound, "ticket not found"); return Ticket{}, false }
+	if !ok { return model.Ticket{}, false }
+	if ticket.UserID != userID { Error(c, http.StatusNotFound, apiErrorNotFound, "ticket not found"); return model.Ticket{}, false }
 	return ticket, true
 }
 
-func loadAnyTicket(c *gin.Context) (Ticket, bool) {
+func loadAnyTicket(c *gin.Context) (model.Ticket, bool) {
 	id, err := parseUintParam(c, "id")
-	if err != nil { Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid ticket id"); return Ticket{}, false }
-	var ticket Ticket
+	if err != nil { Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid ticket id"); return model.Ticket{}, false }
+	var ticket model.Ticket
 	if err := GlobalDB.WithContext(c.Request.Context()).First(&ticket, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound { Error(c, http.StatusNotFound, apiErrorNotFound, "ticket not found"); return Ticket{}, false }
-		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load ticket"); return Ticket{}, false
+		if err == gorm.ErrRecordNotFound { Error(c, http.StatusNotFound, apiErrorNotFound, "ticket not found"); return model.Ticket{}, false }
+		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load ticket"); return model.Ticket{}, false
 	}
 	return ticket, true
 }
 
-func createTicketReply(c *gin.Context, ticket Ticket, userID uint, isAdmin bool) {
+func createTicketReply(c *gin.Context, ticket model.Ticket, userID uint, isAdmin bool) {
 	var req struct{ Content string `json:"content"` }
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Content) == "" { Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid reply payload"); return }
-	reply := TicketReply{TicketID: ticket.ID, UserID: userID, IsAdmin: isAdmin, Content: strings.TrimSpace(req.Content)}
+	reply := model.TicketReply{TicketID: ticket.ID, UserID: userID, IsAdmin: isAdmin, Content: strings.TrimSpace(req.Content)}
 	status := ticket.Status
 	if isAdmin && status == "open" { status = "answered" }
 	if !isAdmin && status == "answered" { status = "open" }
 	err := GlobalDB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&reply).Error; err != nil { return err }
-		return tx.Model(&Ticket{}).Where("id = ?", ticket.ID).Updates(map[string]any{"status": status}).Error
+		return tx.Model(&model.Ticket{}).Where("id = ?", ticket.ID).Updates(map[string]any{"status": status}).Error
 	})
 	if err != nil { Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create reply"); return }
 	Success(c, replyPayload(reply))
 }
 
-func ticketDetailPayload(c *gin.Context, ticket Ticket) gin.H {
-	var replies []TicketReply
+func ticketDetailPayload(c *gin.Context, ticket model.Ticket) gin.H {
+	var replies []model.TicketReply
 	_ = GlobalDB.WithContext(c.Request.Context()).Where("ticket_id = ?", ticket.ID).Order("created_at ASC, id ASC").Find(&replies).Error
 	items := make([]gin.H, 0, len(replies))
 	for _, r := range replies { items = append(items, replyPayload(r)) }
@@ -238,11 +239,11 @@ func ticketDetailPayload(c *gin.Context, ticket Ticket) gin.H {
 	return out
 }
 
-func ticketPayload(t Ticket, content string) gin.H {
+func ticketPayload(t model.Ticket, content string) gin.H {
 	return gin.H{"id": t.ID, "user_id": t.UserID, "title": t.Title, "category": t.Category, "priority": t.Priority, "status": t.Status, "assignee_id": t.AssigneeID, "content": content, "created_at": t.CreatedAt, "updated_at": t.UpdatedAt}
 }
 
-func replyPayload(r TicketReply) gin.H {
+func replyPayload(r model.TicketReply) gin.H {
 	return gin.H{"id": r.ID, "ticket_id": r.TicketID, "user_id": r.UserID, "is_admin": r.IsAdmin, "content": r.Content, "created_at": r.CreatedAt}
 }
 

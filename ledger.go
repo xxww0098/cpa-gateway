@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -36,7 +37,7 @@ func (l *Ledger) Credit(ctx context.Context, userID uint, amount float64, ref st
 	}
 
 	return l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var user User
+		var user model.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, userID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrUserNotFound
@@ -49,7 +50,7 @@ func (l *Ledger) Credit(ctx context.Context, userID uint, amount float64, ref st
 			return err
 		}
 
-		return tx.Create(&BalanceLog{
+		return tx.Create(&model.BalanceLog{
 			UserID:    userID,
 			Amount:    amount,
 			Type:      balanceLogTypeCredit,
@@ -65,7 +66,7 @@ func (l *Ledger) Debit(ctx context.Context, userID uint, amount float64, ref str
 	}
 
 	return l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var user User
+		var user model.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, userID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrUserNotFound
@@ -82,7 +83,7 @@ func (l *Ledger) Debit(ctx context.Context, userID uint, amount float64, ref str
 			return err
 		}
 
-		return tx.Create(&BalanceLog{
+		return tx.Create(&model.BalanceLog{
 			UserID:    userID,
 			Amount:    -amount,
 			Type:      balanceLogTypeDebit,
@@ -156,7 +157,7 @@ func (l *Ledger) Release(ctx context.Context, userID uint, requestID string) err
 
 // GetBalance returns DB balance minus active Redis holds. If Redis is nil, only DB balance is returned.
 func (l *Ledger) GetBalance(ctx context.Context, userID uint) (float64, error) {
-	var user User
+	var user model.User
 	if err := l.db.WithContext(ctx).First(&user, userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return 0, ErrUserNotFound

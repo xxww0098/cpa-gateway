@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/model"
 )
 
 func RegisterAdminRoutes(rg *gin.RouterGroup) {
@@ -45,25 +46,25 @@ func AdminDashboardHandler(c *gin.Context) {
 	}
 
 	var userTotal int64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&User{}).Count(&userTotal).Error; err != nil {
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.User{}).Count(&userTotal).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count users")
 		return
 	}
 
 	var userActive int64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&User{}).Where("status = ?", userStatusActive).Count(&userActive).Error; err != nil {
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.User{}).Where("status = ?", userStatusActive).Count(&userActive).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count active users")
 		return
 	}
 
 	var keyTotal int64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&ApiKey{}).Count(&keyTotal).Error; err != nil {
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Count(&keyTotal).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count api keys")
 		return
 	}
 
 	var keyActive int64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&ApiKey{}).Where("status = ?", "active").Count(&keyActive).Error; err != nil {
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("status = ?", "active").Count(&keyActive).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count active api keys")
 		return
 	}
@@ -73,13 +74,13 @@ func AdminDashboardHandler(c *gin.Context) {
 	weekStart := todayStart.AddDate(0, 0, -6)
 
 	var todayReq int64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).Where("created_at >= ?", todayStart).Count(&todayReq).Error; err != nil {
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", todayStart).Count(&todayReq).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load today usage")
 		return
 	}
 
 	var todayCost float64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).
 		Select("COALESCE(SUM(cost), 0)").
 		Where("created_at >= ?", todayStart).
 		Scan(&todayCost).Error; err != nil {
@@ -88,7 +89,7 @@ func AdminDashboardHandler(c *gin.Context) {
 	}
 
 	var weekReq int64
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).Where("created_at >= ?", weekStart).Count(&weekReq).Error; err != nil {
+	if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", weekStart).Count(&weekReq).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load week usage")
 		return
 	}
@@ -135,7 +136,7 @@ func requireAdmin(c *gin.Context) bool {
 		return true
 	}
 
-	var user User
+	var user model.User
 	if err := GlobalDB.WithContext(c.Request.Context()).First(&user, bc.UserID).Error; err == nil && isAdminEmail(user.Email) {
 		return true
 	}

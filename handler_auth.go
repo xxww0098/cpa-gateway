@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/model"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -68,7 +69,7 @@ func RegisterHandler(c *gin.Context) {
 	if isAdminEmail(email) {
 		role = "admin"
 	}
-	user := User{Email: email, PasswordHash: string(hash), Role: role, Status: userStatusActive}
+	user := model.User{Email: email, PasswordHash: string(hash), Role: role, Status: userStatusActive}
 	if err := createUserWithInitialCredit(c, &user); err != nil {
 		if isUniqueConstraintError(err) {
 			Error(c, http.StatusConflict, apiErrorConflict, "email already registered")
@@ -105,7 +106,7 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	var user User
+	var user model.User
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("email = ? AND status = ?", email, userStatusActive).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			Error(c, http.StatusUnauthorized, apiErrorUnauthorized, "invalid email or password")
@@ -139,7 +140,7 @@ func validAuthInput(email, password string) bool {
 	return email != "" && strings.Contains(email, "@") && len(password) >= 8
 }
 
-func createUserWithInitialCredit(c *gin.Context, user *User) error {
+func createUserWithInitialCredit(c *gin.Context, user *model.User) error {
 	if GlobalLedger != nil {
 		if err := GlobalDB.WithContext(c.Request.Context()).Create(user).Error; err != nil {
 			return err
@@ -156,7 +157,7 @@ func createUserWithInitialCredit(c *gin.Context, user *User) error {
 		if err := tx.Create(user).Error; err != nil {
 			return err
 		}
-		return tx.Create(&BalanceLog{
+		return tx.Create(&model.BalanceLog{
 			UserID:    user.ID,
 			Amount:    initialRegisterCredit,
 			Type:      balanceLogTypeCredit,
@@ -165,7 +166,7 @@ func createUserWithInitialCredit(c *gin.Context, user *User) error {
 	})
 }
 
-func authUserFromModel(user User) authUserResponse {
+func authUserFromModel(user model.User) authUserResponse {
 	return authUserResponse{
 		ID:        user.ID,
 		Email:     user.Email,

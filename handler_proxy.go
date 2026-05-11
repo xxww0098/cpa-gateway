@@ -17,6 +17,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/xxww0098/cpa-gateway/model"
 )
 
 const (
@@ -251,8 +252,8 @@ func ProxyChatHandler(c *gin.Context) {
 		return
 	}
 
-	model := strings.TrimSpace(reqBody.Model)
-	if model == "" {
+	modelName := strings.TrimSpace(reqBody.Model)
+	if modelName == "" {
 		releaseProxyHold(c.Request.Context(), bc)
 		writeOpenAIError(c, http.StatusBadRequest, proxyErrorInvalidRequest, "missing_model", "request body must include a non-empty model")
 		return
@@ -264,12 +265,12 @@ func ProxyChatHandler(c *gin.Context) {
 		return
 	}
 
-	execReq, opts := buildProxyExecutionRequest(c, model, reqBody.Stream, rawJSON)
+	execReq, opts := buildProxyExecutionRequest(c, modelName, reqBody.Stream, rawJSON)
 	if reqBody.Stream {
-		executeProxyStream(c, bc, model, rawJSON, execReq, opts)
+		executeProxyStream(c, bc, modelName, rawJSON, execReq, opts)
 		return
 	}
-	executeProxyNonStream(c, bc, model, rawJSON, execReq, opts)
+	executeProxyNonStream(c, bc, modelName, rawJSON, execReq, opts)
 }
 
 // ProxyModelsHandler handles GET /v1/models with an OpenAI-compatible model list response.
@@ -292,9 +293,9 @@ func ProxyModelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
 }
 
-func executeProxyNonStream(c *gin.Context, bc *BillingCtx, model string, rawJSON []byte, execReq cliproxyexecutor.Request, opts cliproxyexecutor.Options) {
+func executeProxyNonStream(c *gin.Context, bc *BillingCtx, modelName string, rawJSON []byte, execReq cliproxyexecutor.Request, opts cliproxyexecutor.Options) {
 	started := time.Now()
-	providers := proxyProvidersForModel(model)
+	providers := proxyProvidersForModel(modelName)
 	provider := providers[0]
 	resp, err := authManager.Execute(c.Request.Context(), providers, execReq, opts)
 	if err != nil {
@@ -303,7 +304,7 @@ func executeProxyNonStream(c *gin.Context, bc *BillingCtx, model string, rawJSON
 		return
 	}
 
-	if err := settleAndLogProxyUsage(c.Request.Context(), bc, provider, model, rawJSON, resp.Payload, len(resp.Payload), false, time.Since(started)); err != nil {
+	if err := settleAndLogProxyUsage(c.Request.Context(), bc, provider, modelName, rawJSON, resp.Payload, len(resp.Payload), false, time.Since(started)); err != nil {
 		releaseProxyHold(c.Request.Context(), bc)
 		slog.Error("failed to settle proxy usage", "request_id", bc.RequestID, "user_id", bc.UserID, "error", err)
 		writeOpenAIError(c, http.StatusInternalServerError, proxyErrorServer, "billing_settlement_failed", "failed to settle proxy usage")
@@ -314,9 +315,9 @@ func executeProxyNonStream(c *gin.Context, bc *BillingCtx, model string, rawJSON
 	c.Data(http.StatusOK, contentTypeOrDefault(resp.Headers, "application/json"), resp.Payload)
 }
 
-func executeProxyStream(c *gin.Context, bc *BillingCtx, model string, rawJSON []byte, execReq cliproxyexecutor.Request, opts cliproxyexecutor.Options) {
+func executeProxyStream(c *gin.Context, bc *BillingCtx, modelName string, rawJSON []byte, execReq cliproxyexecutor.Request, opts cliproxyexecutor.Options) {
 	started := time.Now()
-	providers := proxyProvidersForModel(model)
+	providers := proxyProvidersForModel(modelName)
 	provider := providers[0]
 	result, err := authManager.ExecuteStream(c.Request.Context(), providers, execReq, opts)
 	if err != nil {
@@ -370,21 +371,21 @@ func executeProxyStream(c *gin.Context, bc *BillingCtx, model string, rawJSON []
 		return
 	}
 
-	if err := settleAndLogProxyUsage(c.Request.Context(), bc, provider, model, rawJSON, nil, outputBytes, true, time.Since(started)); err != nil {
+	if err := settleAndLogProxyUsage(c.Request.Context(), bc, provider, modelName, rawJSON, nil, outputBytes, true, time.Since(started)); err != nil {
 		releaseProxyHold(c.Request.Context(), bc)
 		slog.Error("failed to settle streaming proxy usage", "request_id", bc.RequestID, "user_id", bc.UserID, "error", err)
 	}
 }
 
-func buildProxyExecutionRequest(c *gin.Context, model string, stream bool, rawJSON []byte) (cliproxyexecutor.Request, cliproxyexecutor.Options) {
+func buildProxyExecutionRequest(c *gin.Context, modelName string, stream bool, rawJSON []byte) (cliproxyexecutor.Request, cliproxyexecutor.Options) {
 	metadata := map[string]any{
-		cliproxyexecutor.RequestedModelMetadataKey: model,
+		cliproxyexecutor.RequestedModelMetadataKey: modelName,
 		cliproxyexecutor.RequestPathMetadataKey:    c.Request.URL.Path,
 		"cpa-gateway_trace_id":                     traceIDFromGin(c),
 	}
 
 	return cliproxyexecutor.Request{
-			Model:    model,
+			Model:    modelName,
 			Payload:  rawJSON,
 			Format:   sdktranslator.FormatOpenAI,
 			Metadata: metadata,
@@ -398,13 +399,13 @@ func buildProxyExecutionRequest(c *gin.Context, model string, stream bool, rawJS
 		}
 }
 
-func proxyProvidersForModel(model string) []string {
-	return []string{proxyProviderForModel(model)}
+func proxyProvidersForModel(modelName string) []string {
+	return []string{proxyProviderForModel(modelName)}
 
 }
 
-func proxyProviderForModel(model string) string {
-	normalized := strings.ToLower(strings.TrimSpace(model))
+func proxyProviderForModel(modelName string) string {
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
 	if strings.HasPrefix(normalized, proxyProviderClaude) || strings.Contains(normalized, proxyProviderClaude+"-") {
 		return proxyProviderClaude
 	}
@@ -467,7 +468,7 @@ func releaseProxyHold(ctx context.Context, bc *BillingCtx) {
 	}
 }
 
-func settleAndLogProxyUsage(ctx context.Context, bc *BillingCtx, provider string, model string, requestPayload []byte, responsePayload []byte, responseBytes int, stream bool, duration time.Duration) error {
+func settleAndLogProxyUsage(ctx context.Context, bc *BillingCtx, provider string, modelName string, requestPayload []byte, responsePayload []byte, responseBytes int, stream bool, duration time.Duration) error {
 	if bc == nil || bc.UserID == 0 {
 		return fmt.Errorf("billing context required")
 	}
@@ -486,12 +487,12 @@ func settleAndLogProxyUsage(ctx context.Context, bc *BillingCtx, provider string
 		provider = proxyProviderOpenAI
 	}
 
-	return GlobalDB.WithContext(ctx).Create(&UsageLog{
+	return GlobalDB.WithContext(ctx).Create(&model.UsageLog{
 		UserID:         bc.UserID,
 		ApiKeyID:       bc.ApiKeyID,
 		GroupID:        bc.GroupID,
 		RequestID:      bc.RequestID,
-		Model:          model,
+		Model:          modelName,
 		Provider:       provider,
 		TokensIn:       tokensIn,
 		TokensOut:      tokensOut,

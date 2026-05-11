@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -126,7 +127,7 @@ func UserProfileHandler(c *gin.Context) {
 		return
 	}
 
-	var user User
+	var user model.User
 	if err := GlobalDB.WithContext(c.Request.Context()).First(&user, bc.UserID).Error; err != nil {
 		handleRecordError(c, err, "failed to load user")
 		return
@@ -156,7 +157,7 @@ func ListAPIKeysHandler(c *gin.Context) {
 		return
 	}
 
-	var keys []ApiKey
+	var keys []model.ApiKey
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("user_id = ? AND status <> ?", bc.UserID, "revoked").Order("created_at DESC").Find(&keys).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list API keys")
 		return
@@ -230,7 +231,7 @@ func DeleteAPIKeyHandler(c *gin.Context) {
 		return
 	}
 
-	res := GlobalDB.WithContext(c.Request.Context()).Model(&ApiKey{}).Where("id = ? AND user_id = ?", id, bc.UserID).Update("status", "revoked")
+	res := GlobalDB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("id = ? AND user_id = ?", id, bc.UserID).Update("status", "revoked")
 	if res.Error != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to revoke API key")
 		return
@@ -248,7 +249,7 @@ func AvailableGroupsHandler(c *gin.Context) {
 		return
 	}
 
-	var groups []Group
+	var groups []model.Group
 	if err := GlobalDB.WithContext(c.Request.Context()).Order("id ASC").Find(&groups).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
 		return
@@ -290,7 +291,7 @@ func RebindAPIKeyGroupHandler(c *gin.Context) {
 		return
 	}
 
-	var key ApiKey
+	var key model.ApiKey
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", id, bc.UserID).First(&key).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			Error(c, http.StatusNotFound, apiErrorNotFound, "API key not found")
@@ -301,7 +302,7 @@ func RebindAPIKeyGroupHandler(c *gin.Context) {
 	}
 
 	if req.GroupID != nil {
-		var group Group
+		var group model.Group
 		if err := GlobalDB.WithContext(c.Request.Context()).First(&group, *req.GroupID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				Error(c, http.StatusBadRequest, apiErrorBadRequest, "group not found")
@@ -335,13 +336,13 @@ func UsageHandler(c *gin.Context) {
 	offset := (page - 1) * pageSize
 
 	var total int64
-	base := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).Where("user_id = ?", bc.UserID)
+	base := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("user_id = ?", bc.UserID)
 	if err := base.Count(&total).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count usage")
 		return
 	}
 
-	var logs []UsageLog
+	var logs []model.UsageLog
 	if err := base.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&logs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list usage")
 		return
@@ -366,7 +367,7 @@ func UsageDetailHandler(c *gin.Context) {
 	pageSize := queryInt(c, "page_size", 20, 1, 100)
 	offset := (page - 1) * pageSize
 
-	base := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).Where("usage_logs.user_id = ?", bc.UserID)
+	base := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("usage_logs.user_id = ?", bc.UserID)
 	base, valid := applyUsageDetailFilters(c, base, bc.UserID)
 	if !valid {
 		return
@@ -378,7 +379,7 @@ func UsageDetailHandler(c *gin.Context) {
 		return
 	}
 
-	var logs []UsageLog
+	var logs []model.UsageLog
 	if err := base.Order("usage_logs.created_at DESC").Limit(pageSize).Offset(offset).Find(&logs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list usage details")
 		return
@@ -507,7 +508,7 @@ func visibleCatalogModelIDsSorted(ctx context.Context) ([]string, error) {
 	if GlobalDB == nil {
 		return nil, errors.New("database not initialized")
 	}
-	var entries []ModelCatalogEntry
+	var entries []model.ModelCatalogEntry
 	if err := GlobalDB.WithContext(ctx).
 		Where("visible = ? AND model_id <> ?", true, "__models_url__").
 		Find(&entries).Error; err != nil {
@@ -535,13 +536,13 @@ func listPanelModelCatalog(ctx context.Context) ([]gin.H, error) {
 	if err != nil {
 		return nil, err
 	}
-	var prices []ModelPrice
+	var prices []model.ModelPrice
 	if len(ids) > 0 {
 		if err := GlobalDB.WithContext(ctx).Where("model_id IN ?", ids).Find(&prices).Error; err != nil {
 			return nil, err
 		}
 	}
-	byID := make(map[string]ModelPrice, len(prices))
+	byID := make(map[string]model.ModelPrice, len(prices))
 	for _, p := range prices {
 		byID[p.ModelID] = p
 	}
@@ -585,7 +586,7 @@ func BalanceHistoryHandler(c *gin.Context) {
 	pageSize := queryInt(c, "page_size", 20, 1, 100)
 	kind := strings.TrimSpace(c.Query("kind"))
 
-	db := GlobalDB.WithContext(c.Request.Context()).Model(&BalanceLog{}).Where("user_id = ?", bc.UserID)
+	db := GlobalDB.WithContext(c.Request.Context()).Model(&model.BalanceLog{}).Where("user_id = ?", bc.UserID)
 	if kind != "" {
 		db = db.Where("type = ?", kind)
 	}
@@ -597,7 +598,7 @@ func BalanceHistoryHandler(c *gin.Context) {
 	}
 
 	// Load all matching logs ASC to compute deterministic running balances.
-	var allLogs []BalanceLog
+	var allLogs []model.BalanceLog
 	if err := db.Order("created_at ASC, id ASC").Find(&allLogs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list balance logs")
 		return
@@ -607,7 +608,7 @@ func BalanceHistoryHandler(c *gin.Context) {
 	type enriched struct {
 		BalanceBefore float64
 		BalanceAfter  float64
-		Log           BalanceLog
+		Log           model.BalanceLog
 	}
 	allItems := make([]enriched, 0, len(allLogs))
 	var running float64
@@ -701,7 +702,7 @@ func applyUsageDetailFilters(c *gin.Context, q *gorm.DB, userID uint) (*gorm.DB,
 			return nil, false
 		}
 		var count int64
-		if err := GlobalDB.WithContext(c.Request.Context()).Model(&ApiKey{}).Where("id = ? AND user_id = ?", uint(apiKeyID), userID).Count(&count).Error; err != nil {
+		if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("id = ? AND user_id = ?", uint(apiKeyID), userID).Count(&count).Error; err != nil {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to validate API key")
 			return nil, false
 		}
@@ -712,8 +713,8 @@ func applyUsageDetailFilters(c *gin.Context, q *gorm.DB, userID uint) (*gorm.DB,
 		q = q.Where("usage_logs.api_key_id = ?", uint(apiKeyID))
 	}
 
-	if model := strings.TrimSpace(c.Query("model")); model != "" {
-		q = q.Where("usage_logs.model ILIKE ?", "%"+model+"%")
+	if modelFilter := strings.TrimSpace(c.Query("model")); modelFilter != "" {
+		q = q.Where("usage_logs.model ILIKE ?", "%"+modelFilter+"%")
 	}
 
 	if startDate := strings.TrimSpace(c.Query("start_date")); startDate != "" {
@@ -784,7 +785,7 @@ func usageDetailStatsForQuery(q *gorm.DB, total int64) (usageDetailStats, error)
 	}, nil
 }
 
-func apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []UsageLog) (map[uint]string, error) {
+func apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []model.UsageLog) (map[uint]string, error) {
 	ids := make([]uint, 0, len(logs))
 	seen := map[uint]bool{}
 	for _, log := range logs {
@@ -798,7 +799,7 @@ func apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []UsageLog) (map[
 		return map[uint]string{}, nil
 	}
 
-	var keys []ApiKey
+	var keys []model.ApiKey
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("user_id = ? AND id IN ?", userID, ids).Find(&keys).Error; err != nil {
 		return nil, err
 	}
@@ -809,35 +810,35 @@ func apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []UsageLog) (map[
 	return names, nil
 }
 
-func usageInputTokens(log UsageLog) int {
+func usageInputTokens(log model.UsageLog) int {
 	if log.InputTokens > 0 {
 		return log.InputTokens
 	}
 	return log.TokensIn
 }
 
-func usageOutputTokens(log UsageLog) int {
+func usageOutputTokens(log model.UsageLog) int {
 	if log.OutputTokens > 0 {
 		return log.OutputTokens
 	}
 	return log.TokensOut
 }
 
-func usageTotalCost(log UsageLog) float64 {
+func usageTotalCost(log model.UsageLog) float64 {
 	if log.TotalCost > 0 {
 		return log.TotalCost
 	}
 	return log.Cost
 }
 
-func usageChargedCost(log UsageLog) float64 {
+func usageChargedCost(log model.UsageLog) float64 {
 	if log.ActualCost > 0 {
 		return log.ActualCost
 	}
 	return log.Cost
 }
 
-func usageRateMultiplier(log UsageLog) float64 {
+func usageRateMultiplier(log model.UsageLog) float64 {
 	if log.RateMultiplier > 0 {
 		return log.RateMultiplier
 	}
@@ -853,7 +854,7 @@ func usageStatsSince(c *gin.Context, userID uint, since time.Time) (gin.H, error
 	}
 
 	var row statsRow
-	err := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).
+	err := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).
 		Select("COUNT(*) AS requests, COALESCE(SUM(CASE WHEN input_tokens > 0 THEN input_tokens ELSE tokens_in END), 0) AS tokens_in, COALESCE(SUM(CASE WHEN output_tokens > 0 THEN output_tokens ELSE tokens_out END), 0) AS tokens_out, COALESCE(SUM(CASE WHEN actual_cost > 0 THEN actual_cost ELSE cost END), 0) AS cost").
 		Where("user_id = ? AND created_at >= ?", userID, since).
 		Scan(&row).Error
@@ -874,12 +875,12 @@ func buildUsageTrend(c *gin.Context, userID uint, days int) ([]trendPoint, error
 	since := time.Now().AddDate(0, 0, -(days - 1))
 	start := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.Local)
 
-	q := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).Where("created_at >= ?", start)
+	q := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", start)
 	if userID > 0 {
 		q = q.Where("user_id = ?", userID)
 	}
 
-	var logs []UsageLog
+	var logs []model.UsageLog
 	if err := q.Find(&logs).Error; err != nil {
 		return nil, err
 	}
@@ -912,12 +913,12 @@ func buildUsageModels(c *gin.Context, userID uint, days int) ([]modelPoint, erro
 	since := time.Now().AddDate(0, 0, -(days - 1))
 	start := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.Local)
 
-	q := GlobalDB.WithContext(c.Request.Context()).Model(&UsageLog{}).Where("created_at >= ?", start)
+	q := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", start)
 	if userID > 0 {
 		q = q.Where("user_id = ?", userID)
 	}
 
-	var logs []UsageLog
+	var logs []model.UsageLog
 	if err := q.Find(&logs).Error; err != nil {
 		return nil, err
 	}

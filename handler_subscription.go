@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -51,7 +52,7 @@ func ListSubscriptionPackagesHandler(c *gin.Context) {
 		return
 	}
 
-	var pkgs []SubscriptionPackage
+	var pkgs []model.SubscriptionPackage
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("enabled = ?", true).Order("id ASC").Find(&pkgs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list subscription packages")
 		return
@@ -81,7 +82,7 @@ func ListSubscriptionsHandler(c *gin.Context) {
 		return
 	}
 
-	var subs []Subscription
+	var subs []model.Subscription
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("user_id = ?", bc.UserID).Order("created_at DESC").Find(&subs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list subscriptions")
 		return
@@ -120,7 +121,7 @@ func PurchaseSubscriptionHandler(c *gin.Context) {
 		return
 	}
 
-	var pkg SubscriptionPackage
+	var pkg model.SubscriptionPackage
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("group_id = ? AND enabled = ?", req.GroupID, true).First(&pkg).Error; err != nil {
 		Error(c, http.StatusNotFound, apiErrorNotFound, "subscription package not found")
 		return
@@ -156,19 +157,22 @@ func PurchaseSubscriptionHandler(c *gin.Context) {
 	}
 	expiresAt := now.AddDate(0, 0, days)
 
-	sub := Subscription{
-		UserID:         bc.UserID,
-		PackageID:      pkg.ID,
-		GroupID:        pkg.GroupID,
-		GroupName:      groupName,
-		Status:         "active",
-		StartsAt:       now,
-		ExpiresAt:      expiresAt,
-		DailyUsageUSD:  0,
-		WeeklyUsageUSD: 0,
+	sub := model.Subscription{
+		UserID:          bc.UserID,
+		PackageID:       pkg.ID,
+		GroupID:         pkg.GroupID,
+		GroupName:       groupName,
+		Status:          "active",
+		StartsAt:        now,
+		ExpiresAt:       expiresAt,
+		DailyUsageUSD:   0,
+		DailyResetAt:    model.NextDailyResetAfter(now),
+		WeeklyUsageUSD:  0,
+		WeeklyResetAt:   model.NextWeeklyResetAfter(now),
 		MonthlyUsageUSD: 0,
-		DailyLimitUSD:  pkg.DailyLimitUSD,
-		WeeklyLimitUSD: pkg.WeeklyLimitUSD,
+		MonthlyResetAt:  model.NextMonthlyResetAfter(now),
+		DailyLimitUSD:   pkg.DailyLimitUSD,
+		WeeklyLimitUSD:  pkg.WeeklyLimitUSD,
 		MonthlyLimitUSD: pkg.MonthlyLimitUSD,
 	}
 	if err := GlobalDB.WithContext(c.Request.Context()).Create(&sub).Error; err != nil {
@@ -194,7 +198,7 @@ func EnsureSubscriptionSeeds(db *gorm.DB) error {
 	proLimit := 100.0
 	enterpriseLimit := 500.0
 
-	seeds := []SubscriptionPackage{
+	seeds := []model.SubscriptionPackage{
 		{
 			Name:                 "Basic",
 			Description:          "适合个人和轻量开发",
@@ -237,11 +241,11 @@ func EnsureSubscriptionSeeds(db *gorm.DB) error {
 			"subscription_price_usd": seed.SubscriptionPriceUSD,
 			"enabled":                seed.Enabled,
 		}
-		if err := db.Model(&SubscriptionPackage{}).Where("group_id = ?", seed.GroupID).Updates(updates).Error; err != nil {
+		if err := db.Model(&model.SubscriptionPackage{}).Where("group_id = ?", seed.GroupID).Updates(updates).Error; err != nil {
 			return err
 		}
 		var count int64
-		if err := db.Model(&SubscriptionPackage{}).Where("group_id = ?", seed.GroupID).Count(&count).Error; err != nil {
+		if err := db.Model(&model.SubscriptionPackage{}).Where("group_id = ?", seed.GroupID).Count(&count).Error; err != nil {
 			return err
 		}
 		if count == 0 {

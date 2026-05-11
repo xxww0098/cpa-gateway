@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -13,7 +14,7 @@ func EnsureSDKManagementSeeds(db *gorm.DB, cfg *Config) error {
 	}
 
 	var providerCount int64
-	if err := db.Model(&ProviderConfig{}).
+	if err := db.Model(&model.ProviderConfig{}).
 		Where("provider = ?", "sdk_config").
 		Count(&providerCount).Error; err != nil {
 		return err
@@ -24,7 +25,7 @@ func EnsureSDKManagementSeeds(db *gorm.DB, cfg *Config) error {
 		if err != nil {
 			return err
 		}
-		pc := ProviderConfig{
+		pc := model.ProviderConfig{
 			Provider:   "sdk_config",
 			ConfigData: data,
 		}
@@ -35,11 +36,11 @@ func EnsureSDKManagementSeeds(db *gorm.DB, cfg *Config) error {
 	}
 
 	var ampcodeCount int64
-	if err := db.Model(&AmpcodeConfig{}).Count(&ampcodeCount).Error; err != nil {
+	if err := db.Model(&model.AmpcodeConfig{}).Count(&ampcodeCount).Error; err != nil {
 		return err
 	}
 	if ampcodeCount == 0 {
-		ac := AmpcodeConfig{
+		ac := model.AmpcodeConfig{
 			ID:         1,
 			ConfigData: json.RawMessage("{}"),
 		}
@@ -71,9 +72,9 @@ type sdkProviderConfigJSON struct {
 }
 
 type sdkConfigJSON struct {
-	BaseURL        string                            `json:"base_url"`
-	TimeoutSeconds int                               `json:"timeout_seconds"`
-	Providers      map[string]sdkProviderConfigJSON  `json:"providers"`
+	BaseURL        string                           `json:"base_url"`
+	TimeoutSeconds int                              `json:"timeout_seconds"`
+	Providers      map[string]sdkProviderConfigJSON `json:"providers"`
 }
 
 func buildSDKConfigData(sdk SDKConfig) (json.RawMessage, error) {

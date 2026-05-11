@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -20,34 +20,7 @@ type PostgresAuthStore struct {
 	db *gorm.DB
 }
 
-// AuthRecord is the PostgreSQL representation of SDK cliproxyauth.Auth.
-// Runtime-only fields such as Index, FileName, Storage, Runtime, and counters are intentionally omitted.
-type AuthRecord struct {
-	ID               string          `gorm:"primaryKey;size:128"`
-	Provider         string          `gorm:"size:64;not null;index"`
-	Prefix           string          `gorm:"size:128;index"`
-	Label            string          `gorm:"size:255"`
-	Status           string          `gorm:"size:64;index"`
-	StatusMessage    string          `gorm:"size:512"`
-	Disabled         bool            `gorm:"not null;default:false"`
-	Unavailable      bool            `gorm:"not null;default:false"`
-	ProxyURL         string          `gorm:"size:1024"`
-	Attributes       json.RawMessage `gorm:"type:jsonb"`
-	Metadata         json.RawMessage `gorm:"type:jsonb"`
-	Quota            json.RawMessage `gorm:"type:jsonb"`
-	ModelStates      json.RawMessage `gorm:"type:jsonb"`
-	LastError        json.RawMessage `gorm:"type:jsonb"`
-	CreatedAt        time.Time       `gorm:"autoCreateTime"`
-	UpdatedAt        time.Time       `gorm:"autoUpdateTime"`
-	LastRefreshedAt  time.Time
-	NextRefreshAfter time.Time
-	NextRetryAfter   time.Time
-}
-
-// TableName pins the table name required by the gateway schema.
-func (AuthRecord) TableName() string {
-	return "auth_records"
-}
+// AuthRecord type moved to model.AuthRecord.
 
 // NewPostgresAuthStore creates a PostgreSQL-backed SDK auth store.
 func NewPostgresAuthStore(db *gorm.DB) *PostgresAuthStore {
@@ -60,14 +33,14 @@ func (s *PostgresAuthStore) List(ctx context.Context) ([]*cliproxyauth.Auth, err
 		return nil, fmt.Errorf("postgres auth store is not initialized")
 	}
 
-	var records []AuthRecord
+	var records []model.AuthRecord
 	if err := s.db.WithContext(ctx).Order("created_at ASC, id ASC").Find(&records).Error; err != nil {
 		return nil, fmt.Errorf("listing auth records: %w", err)
 	}
 
 	auths := make([]*cliproxyauth.Auth, 0, len(records))
 	for i := range records {
-		auth, err := records[i].toAuth()
+		auth, err := authFromRecord(records[i])
 		if err != nil {
 			return nil, fmt.Errorf("decoding auth record %q: %w", records[i].ID, err)
 		}
@@ -114,13 +87,13 @@ func (s *PostgresAuthStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
 	}
-	if err := s.db.WithContext(ctx).Delete(&AuthRecord{ID: id}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Delete(&model.AuthRecord{ID: id}).Error; err != nil {
 		return fmt.Errorf("deleting auth record %q: %w", id, err)
 	}
 	return nil
 }
 
-func authRecordFromAuth(auth *cliproxyauth.Auth) (*AuthRecord, error) {
+func authRecordFromAuth(auth *cliproxyauth.Auth) (*model.AuthRecord, error) {
 	attributes, err := marshalJSONB(auth.Attributes)
 	if err != nil {
 		return nil, fmt.Errorf("encoding auth attributes: %w", err)
@@ -142,7 +115,7 @@ func authRecordFromAuth(auth *cliproxyauth.Auth) (*AuthRecord, error) {
 		return nil, fmt.Errorf("encoding auth last error: %w", err)
 	}
 
-	return &AuthRecord{
+	return &model.AuthRecord{
 		ID:               auth.ID,
 		Provider:         auth.Provider,
 		Prefix:           auth.Prefix,
@@ -165,7 +138,7 @@ func authRecordFromAuth(auth *cliproxyauth.Auth) (*AuthRecord, error) {
 	}, nil
 }
 
-func (r AuthRecord) toAuth() (*cliproxyauth.Auth, error) {
+func authFromRecord(r model.AuthRecord) (*cliproxyauth.Auth, error) {
 	auth := &cliproxyauth.Auth{
 		ID:               r.ID,
 		Provider:         r.Provider,

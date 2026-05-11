@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
@@ -83,7 +84,7 @@ type sdkMgmtOAuthTokenResponse struct {
 }
 
 func loadAmpcodeConfig(ctx context.Context) (map[string]any, error) {
-	var cfg AmpcodeConfig
+	var cfg model.AmpcodeConfig
 	err := GlobalDB.WithContext(ctx).First(&cfg, 1).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -106,12 +107,12 @@ func saveAmpcodeConfig(ctx context.Context, m map[string]any) error {
 		return err
 	}
 	db := GlobalDB.WithContext(ctx)
-	result := db.Model(&AmpcodeConfig{}).Where("id = 1").Update("config_data", data)
+	result := db.Model(&model.AmpcodeConfig{}).Where("id = 1").Update("config_data", data)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return db.Create(&AmpcodeConfig{ID: 1, ConfigData: data}).Error
+		return db.Create(&model.AmpcodeConfig{ID: 1, ConfigData: data}).Error
 	}
 	return nil
 }
@@ -1538,7 +1539,7 @@ func SDKMgmtOAuthSessionsHandler(c *gin.Context) {
 	}
 	sdkMgmtCleanupExpiredOAuthSessions(c.Request.Context())
 
-	var sessions []OAuthSession
+	var sessions []model.OAuthSession
 	if err := GlobalDB.WithContext(c.Request.Context()).Where("expires_at > ? OR status IN ?", time.Now().UTC(), []string{"completed", "failed"}).Order("created_at DESC").Find(&sessions).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5003, "failed to list OAuth sessions")
 		return
@@ -1605,7 +1606,7 @@ func SDKMgmtOAuthStatusHandler(c *gin.Context) {
 		return
 	}
 
-	var session OAuthSession
+	var session model.OAuthSession
 	err := GlobalDB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -1761,8 +1762,8 @@ func sdkMgmtOAuthCallbackParams(c *gin.Context) (string, string) {
 	return code, state
 }
 
-func sdkMgmtLoadPendingOAuthSession(c *gin.Context, provider string, state string) (OAuthSession, sdkMgmtOAuthSessionConfig, bool) {
-	var session OAuthSession
+func sdkMgmtLoadPendingOAuthSession(c *gin.Context, provider string, state string) (model.OAuthSession, sdkMgmtOAuthSessionConfig, bool) {
+	var session model.OAuthSession
 	err := GlobalDB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -1987,7 +1988,7 @@ func sdkMgmtGeminiTokenMetadata(token sdkMgmtOAuthTokenResponse) map[string]any 
 	return values
 }
 
-func sdkMgmtMarkOAuthSession(ctx context.Context, session *OAuthSession, status string, authID *string) {
+func sdkMgmtMarkOAuthSession(ctx context.Context, session *model.OAuthSession, status string, authID *string) {
 	if GlobalDB == nil || session == nil || session.ID == 0 {
 		return
 	}
@@ -2002,10 +2003,10 @@ func sdkMgmtCleanupExpiredOAuthSessions(ctx context.Context) {
 	if GlobalDB == nil {
 		return
 	}
-	_ = GlobalDB.WithContext(ctx).Model(&OAuthSession{}).Where("status = ? AND expires_at <= ?", "pending", time.Now().UTC()).Update("status", "failed").Error
+	_ = GlobalDB.WithContext(ctx).Model(&model.OAuthSession{}).Where("status = ? AND expires_at <= ?", "pending", time.Now().UTC()).Update("status", "failed").Error
 }
 
-func sdkMgmtSerializeOAuthSession(session OAuthSession) gin.H {
+func sdkMgmtSerializeOAuthSession(session model.OAuthSession) gin.H {
 	status := session.Status
 	if status == "pending" && time.Now().UTC().After(session.ExpiresAt) {
 		status = "failed"
@@ -2085,7 +2086,7 @@ func sdkMgmtOAuthAuthURLHandler(c *gin.Context, endpoint string) {
 		Error(c, http.StatusInternalServerError, 5004, "failed to create OAuth session")
 		return
 	}
-	session := OAuthSession{Provider: provider, State: state, AuthURL: authURL, Status: "pending", ConfigData: encoded, ExpiresAt: time.Now().UTC().Add(sdkMgmtOAuthSessionTTL)}
+	session := model.OAuthSession{Provider: provider, State: state, AuthURL: authURL, Status: "pending", ConfigData: encoded, ExpiresAt: time.Now().UTC().Add(sdkMgmtOAuthSessionTTL)}
 	if err := GlobalDB.WithContext(c.Request.Context()).Create(&session).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5004, "failed to store OAuth session")
 		return
@@ -2400,7 +2401,7 @@ func SDKMgmtAmpcodeUpstreamAPIKeyDeleteHandler(c *gin.Context) {
 // ── SDK Config Persistence ──
 
 func sdkMgmtReadConfig() (map[string]any, error) {
-	var pc ProviderConfig
+	var pc model.ProviderConfig
 	err := GlobalDB.Where("provider = ?", "sdk_config").First(&pc).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -2421,8 +2422,8 @@ func sdkMgmtWriteConfig(data map[string]any) error {
 		return err
 	}
 	return GlobalDB.Where("provider = ?", "sdk_config").
-		Assign(ProviderConfig{ConfigData: raw}).
-		FirstOrCreate(&ProviderConfig{Provider: "sdk_config", ConfigData: raw}).Error
+		Assign(model.ProviderConfig{ConfigData: raw}).
+		FirstOrCreate(&model.ProviderConfig{Provider: "sdk_config", ConfigData: raw}).Error
 }
 
 // ── Config Handlers ──
@@ -2709,7 +2710,7 @@ func SDKMgmtLogsHandler(c *gin.Context) {
 	}
 	level := c.Query("level")
 
-	q := GlobalDB.Model(&UsageLog{}).Order("created_at DESC").Limit(limit)
+	q := GlobalDB.Model(&model.UsageLog{}).Order("created_at DESC").Limit(limit)
 	switch level {
 	case "error":
 		q = q.Where("failed = ?", true)
@@ -2717,7 +2718,7 @@ func SDKMgmtLogsHandler(c *gin.Context) {
 		q = q.Where("failed = ?", false)
 	}
 
-	var logs []UsageLog
+	var logs []model.UsageLog
 	if err := q.Find(&logs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5006, "failed to query usage logs")
 		return
@@ -2763,8 +2764,8 @@ func SDKMgmtRequestErrorLogsHandler(c *gin.Context) {
 		limit = min(l, 200)
 	}
 
-	var logs []UsageLog
-	if err := GlobalDB.Model(&UsageLog{}).Where("failed = ?", true).
+	var logs []model.UsageLog
+	if err := GlobalDB.Model(&model.UsageLog{}).Where("failed = ?", true).
 		Order("created_at DESC").Limit(limit).Find(&logs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5006, "failed to query error logs")
 		return
@@ -2806,7 +2807,7 @@ func SDKMgmtModelDefinitionsHandler(c *gin.Context) {
 	channel := c.Param("channel")
 
 	// Attempt to read catalog entries from model_catalog_entries table
-	var catalog []ModelCatalogEntry
+	var catalog []model.ModelCatalogEntry
 	GlobalDB.Where("channel_key = ?", channel).Find(&catalog)
 
 	var models []gin.H
