@@ -1,4 +1,4 @@
-package main
+package executor
 
 import (
 	"bytes"
@@ -18,13 +18,12 @@ import (
 )
 
 const (
-	proxyProviderCodex        = "codex"
 	codexDefaultBaseURL       = "https://api.openai.com"
 	codexChatCompletionsPath  = "/v1/chat/completions"
 	codexOAuthTokenURL        = "https://auth.openai.com/oauth/token"
 	codexOAuthClientID        = "app_EMoamEEZ73f0CkXaXp7hrann"
 	codexMetadataAPIKey       = "api_key"
-	codexMetadataAccessToken  = "access_token"
+	CodexMetadataAccessToken  = "access_token"
 	codexMetadataRefreshToken = "refresh_token"
 	codexMetadataTokenData    = "token_data"
 	codexMetadataExpiresAt    = "expires_at"
@@ -33,10 +32,10 @@ const (
 	codexMetadataIDToken      = "id_token"
 )
 
-// codexExecutor implements cliproxyauth.ProviderExecutor for Codex/OpenAI OAuth
+// CodexExecutor implements cliproxyauth.ProviderExecutor for Codex/OpenAI OAuth
 // credentials. It avoids SDK internal OAuth packages so CPA-Gateway keeps HTTP
 // lifecycle ownership while using SDK auth records as data only.
-type codexExecutor struct {
+type CodexExecutor struct {
 	baseURL     string
 	accessToken string
 	client      *http.Client
@@ -50,7 +49,8 @@ type codexRefreshResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-func newCodexExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*codexExecutor, error) {
+// NewCodexExecutor creates a CodexExecutor from the provided config.
+func NewCodexExecutor(cfg ProviderConfig, timeoutSeconds int) (*CodexExecutor, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = codexDefaultBaseURL
@@ -60,20 +60,26 @@ func newCodexExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*codexExecutor
 		return nil, fmt.Errorf("invalid codex base_url")
 	}
 
-	timeout := proxyDefaultTimeout
+	timeout := defaultTimeout
 	if timeoutSeconds > 0 {
 		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
-	return &codexExecutor{
+	return &CodexExecutor{
 		baseURL:     baseURL,
 		accessToken: strings.TrimSpace(cfg.APIKey),
 		client:      &http.Client{Timeout: timeout},
 	}, nil
 }
 
-func (e *codexExecutor) Identifier() string { return proxyProviderCodex }
+// BaseURL exposes the configured upstream base URL.
+func (e *CodexExecutor) BaseURL() string { return e.baseURL }
 
-func (e *codexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+// AccessToken exposes the config-level access token used to seed auth records.
+func (e *CodexExecutor) AccessToken() string { return e.accessToken }
+
+func (e *CodexExecutor) Identifier() string { return providerCodex }
+
+func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	accessToken, baseURL := e.resolveCredentials(auth)
 	resp, err := e.doChatCompletionsRequest(ctx, req, opts, accessToken, baseURL)
 	if err != nil {
@@ -98,7 +104,7 @@ func (e *codexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	return wrapped, nil
 }
 
-func (e *codexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	accessToken, baseURL := e.resolveCredentials(auth)
 	streamOpts := opts
 	streamOpts.Stream = true
@@ -142,7 +148,7 @@ func (e *codexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	return &cliproxyexecutor.StreamResult{Headers: resp.Header.Clone(), Chunks: chunks}, nil
 }
 
-func (e *codexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
 		return nil, nil
 	}
@@ -166,7 +172,7 @@ func (e *codexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		tokenResp.RefreshToken = refreshToken
 	}
 	if tokenResp.AccessToken != "" {
-		clone.Metadata[codexMetadataAccessToken] = tokenResp.AccessToken
+		clone.Metadata[CodexMetadataAccessToken] = tokenResp.AccessToken
 	}
 	clone.Metadata[codexMetadataRefreshToken] = tokenResp.RefreshToken
 	if tokenResp.IDToken != "" {
@@ -185,7 +191,7 @@ func (e *codexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	return clone, nil
 }
 
-func (e *codexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	_ = ctx
 	_ = auth
 	_ = opts
@@ -197,7 +203,7 @@ func (e *codexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	}, nil
 }
 
-func (e *codexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
+func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("http request is required")
 	}
@@ -210,7 +216,7 @@ func (e *codexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 	return e.client.Do(req)
 }
 
-func (e *codexExecutor) doChatCompletionsRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, accessToken string, baseURL string) (*http.Response, error) {
+func (e *CodexExecutor) doChatCompletionsRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, accessToken string, baseURL string) (*http.Response, error) {
 	if accessToken == "" {
 		return nil, fmt.Errorf("codex access token is required")
 	}
@@ -235,7 +241,7 @@ func (e *codexExecutor) doChatCompletionsRequest(ctx context.Context, req clipro
 	return e.client.Do(httpReq)
 }
 
-func (e *codexExecutor) resolveCredentials(auth *cliproxyauth.Auth) (accessToken, baseURL string) {
+func (e *CodexExecutor) resolveCredentials(auth *cliproxyauth.Auth) (accessToken, baseURL string) {
 	accessToken = e.accessToken
 	baseURL = e.baseURL
 	if strings.TrimSpace(baseURL) == "" {
@@ -250,10 +256,10 @@ func (e *codexExecutor) resolveCredentials(auth *cliproxyauth.Auth) (accessToken
 		baseURL = strings.TrimRight(strings.TrimSpace(u), "/")
 	}
 
-	if value := stringFromMap(auth.Metadata, codexMetadataAccessToken); value != "" {
+	if value := stringFromMap(auth.Metadata, CodexMetadataAccessToken); value != "" {
 		return value, baseURL
 	}
-	if value := nestedString(auth.Metadata, codexMetadataTokenData, codexMetadataAccessToken); value != "" {
+	if value := nestedString(auth.Metadata, codexMetadataTokenData, CodexMetadataAccessToken); value != "" {
 		return value, baseURL
 	}
 	if value := stringFromMap(auth.Metadata, codexMetadataAPIKey); value != "" {
@@ -262,7 +268,7 @@ func (e *codexExecutor) resolveCredentials(auth *cliproxyauth.Auth) (accessToken
 	if value := nestedString(auth.Metadata, codexMetadataTokenData, codexMetadataAPIKey); value != "" {
 		return value, baseURL
 	}
-	if value := e.stringFieldFromStorage(auth, "AccessToken", codexMetadataAccessToken); value != "" {
+	if value := e.stringFieldFromStorage(auth, "AccessToken", CodexMetadataAccessToken); value != "" {
 		return value, baseURL
 	}
 	if value := e.stringFieldFromStorage(auth, "APIKey", codexMetadataAPIKey); value != "" {
@@ -271,7 +277,7 @@ func (e *codexExecutor) resolveCredentials(auth *cliproxyauth.Auth) (accessToken
 	return strings.TrimSpace(accessToken), baseURL
 }
 
-func (e *codexExecutor) resolveRefreshToken(auth *cliproxyauth.Auth) string {
+func (e *CodexExecutor) resolveRefreshToken(auth *cliproxyauth.Auth) string {
 	if auth == nil {
 		return ""
 	}
@@ -284,7 +290,7 @@ func (e *codexExecutor) resolveRefreshToken(auth *cliproxyauth.Auth) string {
 	return e.stringFieldFromStorage(auth, "RefreshToken", codexMetadataRefreshToken)
 }
 
-func (e *codexExecutor) stringFieldFromStorage(auth *cliproxyauth.Auth, fieldName string, jsonName string) string {
+func (e *CodexExecutor) stringFieldFromStorage(auth *cliproxyauth.Auth, fieldName string, jsonName string) string {
 	if auth == nil || auth.Storage == nil {
 		return ""
 	}
@@ -302,7 +308,7 @@ func (e *codexExecutor) stringFieldFromStorage(auth *cliproxyauth.Auth, fieldNam
 	return stringFromMap(values, fieldName)
 }
 
-func (e *codexExecutor) refreshOAuthToken(ctx context.Context, refreshToken string) (*codexRefreshResponse, error) {
+func (e *CodexExecutor) refreshOAuthToken(ctx context.Context, refreshToken string) (*codexRefreshResponse, error) {
 	form := url.Values{
 		"client_id":     {codexOAuthClientID},
 		"grant_type":    {"refresh_token"},
@@ -335,7 +341,7 @@ func (e *codexExecutor) refreshOAuthToken(ctx context.Context, refreshToken stri
 	return &tokenResp, nil
 }
 
-func (e *codexExecutor) updatedTokenData(raw any, tokenResp *codexRefreshResponse, previousRefreshToken string, now time.Time) map[string]any {
+func (e *CodexExecutor) updatedTokenData(raw any, tokenResp *codexRefreshResponse, previousRefreshToken string, now time.Time) map[string]any {
 	tokenData := map[string]any{}
 	switch v := raw.(type) {
 	case map[string]any:
@@ -359,7 +365,7 @@ func (e *codexExecutor) updatedTokenData(raw any, tokenResp *codexRefreshRespons
 		}
 	}
 	if tokenResp.AccessToken != "" {
-		tokenData[codexMetadataAccessToken] = tokenResp.AccessToken
+		tokenData[CodexMetadataAccessToken] = tokenResp.AccessToken
 	}
 	refreshToken := tokenResp.RefreshToken
 	if refreshToken == "" {
@@ -378,7 +384,7 @@ func (e *codexExecutor) updatedTokenData(raw any, tokenResp *codexRefreshRespons
 	return tokenData
 }
 
-func (e *codexExecutor) chatCompletionsEndpoint(query url.Values, baseURL string) (string, error) {
+func (e *CodexExecutor) chatCompletionsEndpoint(query url.Values, baseURL string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		base = codexDefaultBaseURL

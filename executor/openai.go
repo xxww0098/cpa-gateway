@@ -1,4 +1,4 @@
-package main
+package executor
 
 import (
 	"bytes"
@@ -16,18 +16,17 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
-// openAICompatibleExecutor implements cliproxyauth.ProviderExecutor for any
-// OpenAI-compatible API. It supports auth-aware credential resolution from
-// provider pool auth records in addition to its own config-level credentials.
-type openAICompatibleExecutor struct {
+// OpenAICompatibleExecutor implements cliproxyauth.ProviderExecutor for any
+// OpenAI-compatible API.
+type OpenAICompatibleExecutor struct {
 	provider string
-	baseURL  string
+	BaseURL  string
 	apiKey   string
 	client   *http.Client
 }
 
-// newOpenAICompatibleExecutor creates a new executor from SDK provider config.
-func newOpenAICompatibleExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*openAICompatibleExecutor, error) {
+// NewOpenAICompatibleExecutor creates a new executor from provider config.
+func NewOpenAICompatibleExecutor(cfg ProviderConfig, timeoutSeconds int) (*OpenAICompatibleExecutor, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if !cfg.Enabled || baseURL == "" || apiKey == "" {
@@ -38,25 +37,23 @@ func newOpenAICompatibleExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*op
 		return nil, fmt.Errorf("invalid sdk base_url")
 	}
 
-	timeout := proxyDefaultTimeout
+	timeout := DefaultTimeout
 	if timeoutSeconds > 0 {
 		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
-	return &openAICompatibleExecutor{
-		provider: proxyProviderOpenAI,
-		baseURL:  baseURL,
+	return &OpenAICompatibleExecutor{
+		provider: ProviderOpenAI,
+		BaseURL:  baseURL,
 		apiKey:   apiKey,
 		client:   &http.Client{Timeout: timeout},
 	}, nil
 }
 
-// Identifier returns the provider key handled by this executor.
-func (e *openAICompatibleExecutor) Identifier() string {
+func (e *OpenAICompatibleExecutor) Identifier() string {
 	return e.provider
 }
 
-// Execute handles non-streaming execution to the OpenAI-compatible upstream.
-func (e *openAICompatibleExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *OpenAICompatibleExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
 	resp, err := e.doChatCompletionsRequest(ctx, req, opts, apiKey, baseURL)
 	if err != nil {
@@ -81,8 +78,7 @@ func (e *openAICompatibleExecutor) Execute(ctx context.Context, auth *cliproxyau
 	return wrapped, nil
 }
 
-// ExecuteStream handles streaming execution to the OpenAI-compatible upstream.
-func (e *openAICompatibleExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *OpenAICompatibleExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
 	resp, err := e.doChatCompletionsRequest(ctx, req, opts, apiKey, baseURL)
 	if err != nil {
@@ -124,8 +120,7 @@ func (e *openAICompatibleExecutor) ExecuteStream(ctx context.Context, auth *clip
 	return &cliproxyexecutor.StreamResult{Headers: resp.Header.Clone(), Chunks: chunks}, nil
 }
 
-// Refresh returns a refreshed active clone for API key credentials (no-op).
-func (e *openAICompatibleExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+func (e *OpenAICompatibleExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	_ = ctx
 	if auth == nil {
 		return nil, nil
@@ -136,12 +131,11 @@ func (e *openAICompatibleExecutor) Refresh(ctx context.Context, auth *cliproxyau
 	return clone, nil
 }
 
-// CountTokens returns an approximate token count for the request payload.
-func (e *openAICompatibleExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *OpenAICompatibleExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	_ = ctx
 	_ = auth
 	_ = opts
-	tokens := approximateTokensFromBytes(len(req.Payload))
+	tokens := ApproximateTokensFromBytes(len(req.Payload))
 	payload, _ := json.Marshal(map[string]any{"total_tokens": tokens})
 	return cliproxyexecutor.Response{
 		Payload: payload,
@@ -149,9 +143,7 @@ func (e *openAICompatibleExecutor) CountTokens(ctx context.Context, auth *clipro
 	}, nil
 }
 
-// HttpRequest injects credentials into the supplied HTTP request and executes it.
-// Uses auth-specific API key when present, falling back to executor config key.
-func (e *openAICompatibleExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
+func (e *OpenAICompatibleExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("http request is required")
 	}
@@ -161,15 +153,9 @@ func (e *openAICompatibleExecutor) HttpRequest(ctx context.Context, auth *clipro
 	return e.client.Do(req)
 }
 
-// resolveCredentials resolves the effective API key and base URL for a given auth record.
-// Provider pool credentials (from Task 5 CRUD) take precedence over executor config defaults:
-//   - API key from auth.Metadata["api_key"]
-//   - Base URL from auth.Attributes["base_url"] or auth.Attributes["base-url"]
-//
-// Never log or return the resolved key in full.
-func (e *openAICompatibleExecutor) resolveCredentials(auth *cliproxyauth.Auth) (apiKey, baseURL string) {
+func (e *OpenAICompatibleExecutor) resolveCredentials(auth *cliproxyauth.Auth) (apiKey, baseURL string) {
 	apiKey = e.apiKey
-	baseURL = e.baseURL
+	baseURL = e.BaseURL
 	if auth == nil {
 		return
 	}
@@ -186,9 +172,7 @@ func (e *openAICompatibleExecutor) resolveCredentials(auth *cliproxyauth.Auth) (
 	return
 }
 
-// doChatCompletionsRequest builds and sends an OpenAI-compatible /v1/chat/completions
-// HTTP request using the supplied apiKey and baseURL (which may be auth-resolved).
-func (e *openAICompatibleExecutor) doChatCompletionsRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, apiKey, baseURL string) (*http.Response, error) {
+func (e *OpenAICompatibleExecutor) doChatCompletionsRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, apiKey, baseURL string) (*http.Response, error) {
 	endpoint, err := e.chatCompletionsEndpoint(opts.Query, baseURL)
 	if err != nil {
 		return nil, err
@@ -197,7 +181,7 @@ func (e *openAICompatibleExecutor) doChatCompletionsRequest(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	copyOutboundHeaders(httpReq.Header, opts.Headers)
+	CopyOutboundHeaders(httpReq.Header, opts.Headers)
 	if httpReq.Header.Get("Content-Type") == "" {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
@@ -210,9 +194,7 @@ func (e *openAICompatibleExecutor) doChatCompletionsRequest(ctx context.Context,
 	return e.client.Do(httpReq)
 }
 
-// chatCompletionsEndpoint builds the full /v1/chat/completions URL from the
-// given base URL, appending query parameters when present.
-func (e *openAICompatibleExecutor) chatCompletionsEndpoint(query url.Values, baseURL string) (string, error) {
+func (e *OpenAICompatibleExecutor) chatCompletionsEndpoint(query url.Values, baseURL string) (string, error) {
 	base := strings.TrimRight(baseURL, "/")
 	var endpoint string
 	switch {

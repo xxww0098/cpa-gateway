@@ -17,12 +17,16 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/xxww0098/cpa-gateway/executor"
 	"github.com/xxww0098/cpa-gateway/model"
 )
 
 const (
-	proxyProviderOpenAI      = "openai"
-	proxyDefaultTimeout      = 60 * time.Second
+	proxyProviderOpenAI      = executor.ProviderOpenAI
+	proxyProviderClaude      = executor.ProviderClaude
+	proxyProviderGemini      = executor.ProviderGemini
+	proxyProviderCodex       = executor.ProviderCodex
+	proxyProviderVertex      = executor.ProviderVertex
 	proxyMaxBodyBytes        = 8 << 20
 	proxyErrorInvalidRequest = "invalid_request_error"
 	proxyErrorServer         = "server_error"
@@ -37,9 +41,14 @@ type openAIChatCompletionRequest struct {
 	Stream bool   `json:"stream"`
 }
 
-type upstreamStatusError struct {
-	status  int
-	payload []byte
+// providerConfigFromSDK translates a root-level SDKProviderConfig into the
+// executor.ProviderConfig struct expected by the migrated executor package.
+func providerConfigFromSDK(cfg SDKProviderConfig) executor.ProviderConfig {
+	return executor.ProviderConfig{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Enabled: cfg.Enabled,
+	}
 }
 
 // InitSDK prepares the SDK execution manager as a pure library dependency.
@@ -61,16 +70,16 @@ func InitSDK(cfg *Config) error {
 
 	openAIConfig := cfg.SDK.openAIProviderConfig()
 	if openAIConfig.complete() {
-		executor, err := newOpenAICompatibleExecutor(openAIConfig, cfg.SDK.TimeoutSeconds)
+		exec, err := executor.NewOpenAICompatibleExecutor(providerConfigFromSDK(openAIConfig), cfg.SDK.TimeoutSeconds)
 		if err != nil {
 			authManager = nil
 			return err
 		}
-		manager.RegisterExecutor(executor)
+		manager.RegisterExecutor(exec)
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-openai-compatible",
-			Provider:  executor.Identifier(),
+			Provider:  exec.Identifier(),
 			Label:     "CPA-Gateway OpenAI-compatible upstream",
 			Status:    cliproxyauth.StatusActive,
 			CreatedAt: now,
@@ -78,7 +87,7 @@ func InitSDK(cfg *Config) error {
 			Attributes: map[string]string{
 				"runtime_only": "true",
 				"source":       "cpa-gateway-config",
-				"base_url":     executor.baseURL,
+				"base_url":     exec.BaseURL,
 			},
 		})
 		if err != nil {
@@ -90,17 +99,17 @@ func InitSDK(cfg *Config) error {
 	}
 
 	claudeConfig := cfg.SDK.Claude
-	claudeExecutor, err := newClaudeExecutor(claudeConfig, cfg.SDK.TimeoutSeconds)
+	claudeExec, err := executor.NewClaudeExecutor(providerConfigFromSDK(claudeConfig), cfg.SDK.TimeoutSeconds)
 	if err != nil {
 		authManager = nil
 		return err
 	}
-	manager.RegisterExecutor(claudeExecutor)
+	manager.RegisterExecutor(claudeExec)
 	if claudeConfig.complete() {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-claude",
-			Provider:  claudeExecutor.Identifier(),
+			Provider:  claudeExec.Identifier(),
 			Label:     "CPA-Gateway Claude upstream",
 			Status:    cliproxyauth.StatusActive,
 			CreatedAt: now,
@@ -108,7 +117,7 @@ func InitSDK(cfg *Config) error {
 			Attributes: map[string]string{
 				"runtime_only": "true",
 				"source":       "cpa-gateway-config",
-				"base_url":     claudeExecutor.baseURL,
+				"base_url":     claudeExec.BaseURL(),
 			},
 		})
 		if err != nil {
@@ -120,17 +129,17 @@ func InitSDK(cfg *Config) error {
 	}
 
 	geminiConfig := cfg.SDK.Gemini
-	geminiExecutor, err := newGeminiExecutor(geminiConfig, cfg.SDK.TimeoutSeconds)
+	geminiExec, err := executor.NewGeminiExecutor(providerConfigFromSDK(geminiConfig), cfg.SDK.TimeoutSeconds)
 	if err != nil {
 		authManager = nil
 		return err
 	}
-	manager.RegisterExecutor(geminiExecutor)
+	manager.RegisterExecutor(geminiExec)
 	if geminiConfig.complete() {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-gemini",
-			Provider:  geminiExecutor.Identifier(),
+			Provider:  geminiExec.Identifier(),
 			Label:     "CPA-Gateway Gemini upstream",
 			Status:    cliproxyauth.StatusActive,
 			CreatedAt: now,
@@ -138,7 +147,7 @@ func InitSDK(cfg *Config) error {
 			Attributes: map[string]string{
 				"runtime_only": "true",
 				"source":       "cpa-gateway-config",
-				"base_url":     geminiExecutor.baseURL,
+				"base_url":     geminiExec.BaseURL(),
 			},
 		})
 		if err != nil {
@@ -150,17 +159,17 @@ func InitSDK(cfg *Config) error {
 	}
 
 	codexConfig := cfg.SDK.Codex
-	codexExecutor, err := newCodexExecutor(codexConfig, cfg.SDK.TimeoutSeconds)
+	codexExec, err := executor.NewCodexExecutor(providerConfigFromSDK(codexConfig), cfg.SDK.TimeoutSeconds)
 	if err != nil {
 		authManager = nil
 		return err
 	}
-	manager.RegisterExecutor(codexExecutor)
+	manager.RegisterExecutor(codexExec)
 	if codexConfig.configured() && strings.TrimSpace(codexConfig.APIKey) != "" {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-codex",
-			Provider:  codexExecutor.Identifier(),
+			Provider:  codexExec.Identifier(),
 			Label:     "CPA-Gateway Codex upstream",
 			Status:    cliproxyauth.StatusActive,
 			CreatedAt: now,
@@ -168,10 +177,10 @@ func InitSDK(cfg *Config) error {
 			Attributes: map[string]string{
 				"runtime_only": "true",
 				"source":       "cpa-gateway-config",
-				"base_url":     codexExecutor.baseURL,
+				"base_url":     codexExec.BaseURL(),
 			},
 			Metadata: map[string]any{
-				codexMetadataAccessToken: codexExecutor.accessToken,
+				executor.CodexMetadataAccessToken: codexExec.AccessToken(),
 			},
 		})
 		if err != nil {
@@ -183,17 +192,17 @@ func InitSDK(cfg *Config) error {
 	}
 
 	vertexConfig := cfg.SDK.Vertex
-	vertexExecutor, err := newVertexExecutor(vertexConfig, cfg.SDK.TimeoutSeconds)
+	vertexExec, err := executor.NewVertexExecutor(providerConfigFromSDK(vertexConfig), cfg.SDK.TimeoutSeconds)
 	if err != nil {
 		authManager = nil
 		return err
 	}
-	manager.RegisterExecutor(vertexExecutor)
+	manager.RegisterExecutor(vertexExec)
 	if vertexConfig.configured() && strings.TrimSpace(vertexConfig.APIKey) != "" {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-vertex",
-			Provider:  vertexExecutor.Identifier(),
+			Provider:  vertexExec.Identifier(),
 			Label:     "CPA-Gateway Vertex upstream",
 			Status:    cliproxyauth.StatusActive,
 			CreatedAt: now,
@@ -201,10 +210,10 @@ func InitSDK(cfg *Config) error {
 			Attributes: map[string]string{
 				"runtime_only": "true",
 				"source":       "cpa-gateway-config",
-				"base_url":     vertexExecutor.baseURL,
+				"base_url":     vertexExec.BaseURL(),
 			},
 			Metadata: map[string]any{
-				vertexMetadataServiceAccount: vertexExecutor.serviceAccountJSON,
+				executor.VertexMetadataServiceAccount: vertexExec.ServiceAccountJSON(),
 			},
 		})
 		if err != nil {
@@ -391,7 +400,7 @@ func buildProxyExecutionRequest(c *gin.Context, modelName string, stream bool, r
 			Metadata: metadata,
 		}, cliproxyexecutor.Options{
 			Stream:          stream,
-			Headers:         sanitizedProxyHeaders(c.Request.Header),
+			Headers:         executor.SanitizedProxyHeaders(c.Request.Header),
 			Query:           cloneURLValues(c.Request.URL.Query()),
 			OriginalRequest: rawJSON,
 			SourceFormat:    sdktranslator.FormatOpenAI,
@@ -513,8 +522,8 @@ func settleAndLogProxyUsage(ctx context.Context, bc *BillingCtx, provider string
 func calculateProxyUsage(bc *BillingCtx, requestPayload []byte, responsePayload []byte, responseBytes int) (int, int, float64, float64, float64, float64, float64) {
 	tokensIn, tokensOut, ok := openAIUsageTokens(responsePayload)
 	if !ok {
-		tokensIn = approximateTokensFromBytes(len(requestPayload))
-		tokensOut = approximateTokensFromBytes(responseBytes)
+		tokensIn = executor.ApproximateTokensFromBytes(len(requestPayload))
+		tokensOut = executor.ApproximateTokensFromBytes(responseBytes)
 	}
 
 	price := 0.0
@@ -552,30 +561,6 @@ func openAIUsageTokens(payload []byte) (int, int, bool) {
 		out = envelope.Usage.TotalTokens
 	}
 	return in, out, in > 0 || out > 0 || envelope.Usage.TotalTokens > 0
-}
-
-func approximateTokensFromBytes(size int) int {
-	if size <= 0 {
-		return 0
-	}
-	return (size + 3) / 4
-}
-
-func sanitizedProxyHeaders(headers http.Header) http.Header {
-	cloned := make(http.Header)
-	copyOutboundHeaders(cloned, headers)
-	return cloned
-}
-
-func copyOutboundHeaders(dst, src http.Header) {
-	for key, vals := range src {
-		if shouldSkipProxyHeader(key) {
-			continue
-		}
-		for _, val := range vals {
-			dst.Add(key, val)
-		}
-	}
 }
 
 func writeUpstreamHeaders(c *gin.Context, headers http.Header, defaultContentType string) {
@@ -657,20 +642,6 @@ func writeProxySSEError(w io.Writer, err error) {
 		},
 	})
 	_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
-}
-
-func (e *upstreamStatusError) Error() string {
-	if e == nil {
-		return ""
-	}
-	return fmt.Sprintf("upstream returned HTTP %d", e.status)
-}
-
-func (e *upstreamStatusError) StatusCode() int {
-	if e == nil {
-		return 0
-	}
-	return e.status
 }
 
 func maxInt(a, b int) int {

@@ -1,4 +1,4 @@
-package main
+package executor
 
 import (
 	"bytes"
@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	proxyProviderClaude            = "claude"
 	claudeDefaultBaseURL           = "https://api.anthropic.com"
 	claudeMessagesPath             = "/v1/messages"
 	claudeAnthropicVersion         = "2023-06-01"
@@ -34,10 +33,10 @@ const (
 	claudeCredentialSourceOAuthKey = "oauth_token"
 )
 
-// claudeExecutor implements cliproxyauth.ProviderExecutor for Anthropic Claude.
+// ClaudeExecutor implements cliproxyauth.ProviderExecutor for Anthropic Claude.
 // It is intentionally independent of SDK internal Claude packages so CPA-Gateway
 // keeps ownership of the HTTP lifecycle while using the SDK as a pure library.
-type claudeExecutor struct {
+type ClaudeExecutor struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
@@ -57,7 +56,8 @@ type claudeRefreshResponse struct {
 	} `json:"account"`
 }
 
-func newClaudeExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*claudeExecutor, error) {
+// NewClaudeExecutor creates a ClaudeExecutor from the provided config.
+func NewClaudeExecutor(cfg ProviderConfig, timeoutSeconds int) (*ClaudeExecutor, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = claudeDefaultBaseURL
@@ -67,22 +67,25 @@ func newClaudeExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*claudeExecut
 		return nil, fmt.Errorf("invalid claude base_url")
 	}
 
-	timeout := proxyDefaultTimeout
+	timeout := defaultTimeout
 	if timeoutSeconds > 0 {
 		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
-	return &claudeExecutor{
+	return &ClaudeExecutor{
 		baseURL: baseURL,
 		apiKey:  strings.TrimSpace(cfg.APIKey),
 		client:  &http.Client{Timeout: timeout},
 	}, nil
 }
 
-func (e *claudeExecutor) Identifier() string {
-	return proxyProviderClaude
+// BaseURL exposes the configured upstream base URL.
+func (e *ClaudeExecutor) BaseURL() string { return e.baseURL }
+
+func (e *ClaudeExecutor) Identifier() string {
+	return providerClaude
 }
 
-func (e *claudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	credential, baseURL := e.resolveCredentials(auth)
 	resp, err := e.doMessagesRequest(ctx, req, opts, credential, baseURL)
 	if err != nil {
@@ -107,7 +110,7 @@ func (e *claudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	return wrapped, nil
 }
 
-func (e *claudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	credential, baseURL := e.resolveCredentials(auth)
 	streamOpts := opts
 	streamOpts.Stream = true
@@ -151,7 +154,7 @@ func (e *claudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	return &cliproxyexecutor.StreamResult{Headers: resp.Header.Clone(), Chunks: chunks}, nil
 }
 
-func (e *claudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
 		return nil, nil
 	}
@@ -194,7 +197,7 @@ func (e *claudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	return clone, nil
 }
 
-func (e *claudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	_ = ctx
 	_ = auth
 	_ = opts
@@ -206,7 +209,7 @@ func (e *claudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	}, nil
 }
 
-func (e *claudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
+func (e *ClaudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("http request is required")
 	}
@@ -219,7 +222,7 @@ func (e *claudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 	return e.client.Do(req)
 }
 
-func (e *claudeExecutor) doMessagesRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, credential claudeCredential, baseURL string) (*http.Response, error) {
+func (e *ClaudeExecutor) doMessagesRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, credential claudeCredential, baseURL string) (*http.Response, error) {
 	if credential.value == "" {
 		return nil, fmt.Errorf("claude credential is required")
 	}
@@ -244,14 +247,14 @@ func (e *claudeExecutor) doMessagesRequest(ctx context.Context, req cliproxyexec
 	return e.client.Do(httpReq)
 }
 
-func (e *claudeExecutor) injectCredentialHeaders(headers http.Header, credential claudeCredential) {
+func (e *ClaudeExecutor) injectCredentialHeaders(headers http.Header, credential claudeCredential) {
 	headers.Set("x-api-key", credential.value)
 	if headers.Get("anthropic-version") == "" {
 		headers.Set("anthropic-version", claudeAnthropicVersion)
 	}
 }
 
-func (e *claudeExecutor) resolveCredentials(auth *cliproxyauth.Auth) (claudeCredential, string) {
+func (e *ClaudeExecutor) resolveCredentials(auth *cliproxyauth.Auth) (claudeCredential, string) {
 	credential := claudeCredential{value: e.apiKey, source: claudeCredentialSourceAPIKey}
 	baseURL := e.baseURL
 	if strings.TrimSpace(baseURL) == "" {
@@ -284,7 +287,7 @@ func (e *claudeExecutor) resolveCredentials(auth *cliproxyauth.Auth) (claudeCred
 	return credential, baseURL
 }
 
-func (e *claudeExecutor) resolveRefreshToken(auth *cliproxyauth.Auth) string {
+func (e *ClaudeExecutor) resolveRefreshToken(auth *cliproxyauth.Auth) string {
 	if auth == nil {
 		return ""
 	}
@@ -300,14 +303,14 @@ func (e *claudeExecutor) resolveRefreshToken(auth *cliproxyauth.Auth) string {
 	return ""
 }
 
-func (e *claudeExecutor) resolveCredentialFromStorage(auth *cliproxyauth.Auth) string {
+func (e *ClaudeExecutor) resolveCredentialFromStorage(auth *cliproxyauth.Auth) string {
 	if value := e.stringFieldFromStorage(auth, "APIKey", claudeMetadataAPIKey); value != "" {
 		return value
 	}
 	return e.stringFieldFromStorage(auth, "AccessToken", claudeMetadataAccessToken)
 }
 
-func (e *claudeExecutor) stringFieldFromStorage(auth *cliproxyauth.Auth, fieldName string, jsonName string) string {
+func (e *ClaudeExecutor) stringFieldFromStorage(auth *cliproxyauth.Auth, fieldName string, jsonName string) string {
 	if auth == nil || auth.Storage == nil {
 		return ""
 	}
@@ -325,7 +328,7 @@ func (e *claudeExecutor) stringFieldFromStorage(auth *cliproxyauth.Auth, fieldNa
 	return stringFromMap(values, fieldName)
 }
 
-func (e *claudeExecutor) refreshOAuthToken(ctx context.Context, refreshToken string) (*claudeRefreshResponse, error) {
+func (e *ClaudeExecutor) refreshOAuthToken(ctx context.Context, refreshToken string) (*claudeRefreshResponse, error) {
 	reqBody := map[string]any{
 		"client_id":     claudeOAuthClientID,
 		"grant_type":    "refresh_token",
@@ -361,7 +364,7 @@ func (e *claudeExecutor) refreshOAuthToken(ctx context.Context, refreshToken str
 	return &tokenResp, nil
 }
 
-func (e *claudeExecutor) messagesEndpoint(query url.Values, baseURL string) (string, error) {
+func (e *ClaudeExecutor) messagesEndpoint(query url.Values, baseURL string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		base = claudeDefaultBaseURL
@@ -392,66 +395,4 @@ func (e *claudeExecutor) messagesEndpoint(query url.Values, baseURL string) (str
 		parsed.RawQuery = values.Encode()
 	}
 	return parsed.String(), nil
-}
-
-func stringFromMap(values map[string]any, key string) string {
-	if values == nil {
-		return ""
-	}
-	raw, ok := values[key]
-	if !ok {
-		return ""
-	}
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case fmt.Stringer:
-		return strings.TrimSpace(v.String())
-	default:
-		return ""
-	}
-}
-
-func nestedString(values map[string]any, parent string, key string) string {
-	if values == nil {
-		return ""
-	}
-	raw, ok := values[parent]
-	if !ok || raw == nil {
-		return ""
-	}
-	switch v := raw.(type) {
-	case map[string]any:
-		return stringFromMap(v, key)
-	case map[string]string:
-		return strings.TrimSpace(v[key])
-	case json.RawMessage:
-		return stringFromJSONBytes(v, key)
-	case []byte:
-		return stringFromJSONBytes(v, key)
-	case string:
-		return stringFromJSONString(v, key)
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return ""
-		}
-		return stringFromJSONBytes(data, key)
-	}
-}
-
-func stringFromJSONString(raw string, key string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	return stringFromJSONBytes([]byte(raw), key)
-}
-
-func stringFromJSONBytes(data []byte, key string) string {
-	var values map[string]any
-	if err := json.Unmarshal(data, &values); err != nil {
-		return ""
-	}
-	return stringFromMap(values, key)
 }

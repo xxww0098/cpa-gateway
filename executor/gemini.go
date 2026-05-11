@@ -1,4 +1,4 @@
-package main
+package executor
 
 import (
 	"bytes"
@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	proxyProviderGemini   = "gemini"
 	geminiDefaultBaseURL  = "https://generativelanguage.googleapis.com"
 	geminiMetadataAPIKey  = "api_key"
 	geminiTokenData       = "token_data"
@@ -25,15 +24,16 @@ const (
 	geminiCredentialQuery = "key"
 )
 
-// geminiExecutor implements cliproxyauth.ProviderExecutor for Google AI Gemini.
+// GeminiExecutor implements cliproxyauth.ProviderExecutor for Google AI Gemini.
 // It intentionally avoids SDK internal packages; CPA-Gateway owns all HTTP IO.
-type geminiExecutor struct {
+type GeminiExecutor struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
 }
 
-func newGeminiExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*geminiExecutor, error) {
+// NewGeminiExecutor creates a GeminiExecutor from the provided config.
+func NewGeminiExecutor(cfg ProviderConfig, timeoutSeconds int) (*GeminiExecutor, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = geminiDefaultBaseURL
@@ -43,20 +43,23 @@ func newGeminiExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*geminiExecut
 		return nil, fmt.Errorf("invalid gemini base_url")
 	}
 
-	timeout := proxyDefaultTimeout
+	timeout := defaultTimeout
 	if timeoutSeconds > 0 {
 		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
-	return &geminiExecutor{
+	return &GeminiExecutor{
 		baseURL: baseURL,
 		apiKey:  strings.TrimSpace(cfg.APIKey),
 		client:  &http.Client{Timeout: timeout},
 	}, nil
 }
 
-func (e *geminiExecutor) Identifier() string { return proxyProviderGemini }
+// BaseURL exposes the configured upstream base URL.
+func (e *GeminiExecutor) BaseURL() string { return e.baseURL }
 
-func (e *geminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *GeminiExecutor) Identifier() string { return providerGemini }
+
+func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
 	resp, err := e.doGenerateContentRequest(ctx, req, opts, apiKey, baseURL, false)
 	if err != nil {
@@ -79,7 +82,7 @@ func (e *geminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	return wrapped, nil
 }
 
-func (e *geminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
 	streamOpts := opts
 	streamOpts.Stream = true
@@ -126,7 +129,7 @@ func (e *geminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 // Refresh is a no-op for Gemini API-key auth. OAuth-style records are kept active
 // so startup and persisted credential loading do not fail; OAuth refresh is handled
 // by future management tasks rather than this provider executor.
-func (e *geminiExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+func (e *GeminiExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	_ = ctx
 	if auth == nil {
 		return nil, nil
@@ -137,7 +140,7 @@ func (e *geminiExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	return clone, nil
 }
 
-func (e *geminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	_ = ctx
 	_ = auth
 	_ = opts
@@ -146,7 +149,7 @@ func (e *geminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	return cliproxyexecutor.Response{Payload: payload, Headers: http.Header{"Content-Type": []string{"application/json"}}}, nil
 }
 
-func (e *geminiExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
+func (e *GeminiExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("http request is required")
 	}
@@ -156,7 +159,7 @@ func (e *geminiExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 	return e.client.Do(req)
 }
 
-func (e *geminiExecutor) doGenerateContentRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, apiKey string, baseURL string, stream bool) (*http.Response, error) {
+func (e *GeminiExecutor) doGenerateContentRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, apiKey string, baseURL string, stream bool) (*http.Response, error) {
 	model := geminiRequestedModel(req, opts)
 	if model == "" {
 		return nil, fmt.Errorf("gemini model is required")
@@ -182,7 +185,7 @@ func (e *geminiExecutor) doGenerateContentRequest(ctx context.Context, req clipr
 	return e.client.Do(httpReq)
 }
 
-func (e *geminiExecutor) injectAPIKey(req *http.Request, apiKey string) {
+func (e *GeminiExecutor) injectAPIKey(req *http.Request, apiKey string) {
 	if strings.TrimSpace(apiKey) != "" {
 		req.Header.Set("x-goog-api-key", strings.TrimSpace(apiKey))
 		return
@@ -192,7 +195,7 @@ func (e *geminiExecutor) injectAPIKey(req *http.Request, apiKey string) {
 	}
 }
 
-func (e *geminiExecutor) resolveCredentials(auth *cliproxyauth.Auth) (apiKey string, baseURL string) {
+func (e *GeminiExecutor) resolveCredentials(auth *cliproxyauth.Auth) (apiKey string, baseURL string) {
 	apiKey = strings.TrimSpace(e.apiKey)
 	baseURL = strings.TrimRight(strings.TrimSpace(e.baseURL), "/")
 	if baseURL == "" {
@@ -222,7 +225,7 @@ func (e *geminiExecutor) resolveCredentials(auth *cliproxyauth.Auth) (apiKey str
 	return apiKey, baseURL
 }
 
-func (e *geminiExecutor) generateContentEndpoint(query url.Values, baseURL string, model string, stream bool) (string, error) {
+func (e *GeminiExecutor) generateContentEndpoint(query url.Values, baseURL string, model string, stream bool) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		base = geminiDefaultBaseURL

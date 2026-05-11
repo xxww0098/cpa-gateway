@@ -1,4 +1,4 @@
-package main
+package executor
 
 import (
 	"bytes"
@@ -25,7 +25,6 @@ import (
 )
 
 const (
-	proxyProviderVertex           = "vertex"
 	vertexDefaultLocation         = "us-central1"
 	vertexDefaultTokenURI         = "https://oauth2.googleapis.com/token"
 	vertexCloudPlatformScope      = "https://www.googleapis.com/auth/cloud-platform"
@@ -37,11 +36,15 @@ const (
 	vertexMetadataTokenData       = "token_data"
 	vertexRefreshSkew             = 2 * time.Minute
 	vertexTokenFallbackExpiration = time.Hour
+
+	// VertexMetadataServiceAccount is the exported metadata key holding
+	// the raw service_account JSON on a cliproxyauth.Auth record.
+	VertexMetadataServiceAccount = vertexMetadataServiceAccount
 )
 
 // vertexExecutor implements cliproxyauth.ProviderExecutor for Vertex AI Gemini.
 // It keeps OAuth and HTTP lifecycle in CPA-Gateway and treats SDK auth records as data only.
-type vertexExecutor struct {
+type VertexExecutor struct {
 	baseURL            string
 	serviceAccountJSON string
 	client             *http.Client
@@ -60,7 +63,15 @@ type vertexTokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-func newVertexExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*vertexExecutor, error) {
+// BaseURL exposes the configured upstream base URL (empty string means
+// derive from default Vertex host).
+func (e *VertexExecutor) BaseURL() string { return e.baseURL }
+
+// ServiceAccountJSON exposes the raw JSON service_account string used to
+// seed persisted auth records.
+func (e *VertexExecutor) ServiceAccountJSON() string { return e.serviceAccountJSON }
+
+func NewVertexExecutor(cfg ProviderConfig, timeoutSeconds int) (*VertexExecutor, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL != "" {
 		parsed, err := url.Parse(baseURL)
@@ -69,20 +80,20 @@ func newVertexExecutor(cfg SDKProviderConfig, timeoutSeconds int) (*vertexExecut
 		}
 	}
 
-	timeout := proxyDefaultTimeout
+	timeout := defaultTimeout
 	if timeoutSeconds > 0 {
 		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
-	return &vertexExecutor{
+	return &VertexExecutor{
 		baseURL:            baseURL,
 		serviceAccountJSON: strings.TrimSpace(cfg.APIKey),
 		client:             &http.Client{Timeout: timeout},
 	}, nil
 }
 
-func (e *vertexExecutor) Identifier() string { return proxyProviderVertex }
+func (e *VertexExecutor) Identifier() string { return providerVertex }
 
-func (e *vertexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *VertexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	accessToken, baseURL, project, location, err := e.credentialsForRequest(ctx, auth)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -108,7 +119,7 @@ func (e *vertexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	return wrapped, nil
 }
 
-func (e *vertexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *VertexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	accessToken, baseURL, project, location, err := e.credentialsForRequest(ctx, auth)
 	if err != nil {
 		return nil, err
@@ -155,7 +166,7 @@ func (e *vertexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	return &cliproxyexecutor.StreamResult{Headers: resp.Header.Clone(), Chunks: chunks}, nil
 }
 
-func (e *vertexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+func (e *VertexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	if auth == nil {
 		return nil, nil
 	}
@@ -188,7 +199,7 @@ func (e *vertexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	return clone, nil
 }
 
-func (e *vertexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *VertexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	_ = ctx
 	_ = auth
 	_ = opts
@@ -197,7 +208,7 @@ func (e *vertexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	return cliproxyexecutor.Response{Payload: payload, Headers: http.Header{"Content-Type": []string{"application/json"}}}, nil
 }
 
-func (e *vertexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
+func (e *VertexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("http request is required")
 	}
@@ -210,7 +221,7 @@ func (e *vertexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 	return e.client.Do(req)
 }
 
-func (e *vertexExecutor) credentialsForRequest(ctx context.Context, auth *cliproxyauth.Auth) (accessToken, baseURL, project, location string, err error) {
+func (e *VertexExecutor) credentialsForRequest(ctx context.Context, auth *cliproxyauth.Auth) (accessToken, baseURL, project, location string, err error) {
 	serviceAccount, saErr := e.resolveServiceAccount(auth)
 	baseURL, project, location = e.resolveEndpointSettings(auth, serviceAccount)
 	if project == "" {
@@ -233,7 +244,7 @@ func (e *vertexExecutor) credentialsForRequest(ctx context.Context, auth *clipro
 	return "", "", "", "", fmt.Errorf("vertex access token refresh did not return a usable token")
 }
 
-func (e *vertexExecutor) copyRefreshedMetadata(dst *cliproxyauth.Auth, src *cliproxyauth.Auth) {
+func (e *VertexExecutor) copyRefreshedMetadata(dst *cliproxyauth.Auth, src *cliproxyauth.Auth) {
 	if dst == nil || src == nil || src.Metadata == nil {
 		return
 	}
@@ -253,7 +264,7 @@ func (e *vertexExecutor) copyRefreshedMetadata(dst *cliproxyauth.Auth, src *clip
 	}
 }
 
-func (e *vertexExecutor) doGenerateContentRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, accessToken string, baseURL string, project string, location string, stream bool) (*http.Response, error) {
+func (e *VertexExecutor) doGenerateContentRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, accessToken string, baseURL string, project string, location string, stream bool) (*http.Response, error) {
 	if accessToken == "" {
 		return nil, fmt.Errorf("vertex access token is required")
 	}
@@ -282,7 +293,7 @@ func (e *vertexExecutor) doGenerateContentRequest(ctx context.Context, req clipr
 	return e.client.Do(httpReq)
 }
 
-func (e *vertexExecutor) generateContentEndpoint(query url.Values, baseURL string, project string, location string, model string, stream bool) (string, error) {
+func (e *VertexExecutor) generateContentEndpoint(query url.Values, baseURL string, project string, location string, model string, stream bool) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		base = fmt.Sprintf("https://%s-aiplatform.googleapis.com", location)
@@ -291,7 +302,7 @@ func (e *vertexExecutor) generateContentEndpoint(query url.Values, baseURL strin
 	if stream {
 		action = "streamGenerateContent"
 	}
-	model = strings.TrimPrefix(strings.TrimSpace(model), proxyProviderVertex+"/")
+	model = strings.TrimPrefix(strings.TrimSpace(model), providerVertex+"/")
 	endpoint := base + "/v1/projects/" + url.PathEscape(project) + "/locations/" + url.PathEscape(location) + "/publishers/google/models/" + url.PathEscape(model) + ":" + action
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
@@ -310,7 +321,7 @@ func (e *vertexExecutor) generateContentEndpoint(query url.Values, baseURL strin
 	return parsed.String(), nil
 }
 
-func (e *vertexExecutor) resolveServiceAccount(auth *cliproxyauth.Auth) (*vertexServiceAccount, error) {
+func (e *VertexExecutor) resolveServiceAccount(auth *cliproxyauth.Auth) (*vertexServiceAccount, error) {
 	raw := ""
 	if auth != nil {
 		raw = serviceAccountStringFromAny(auth.Metadata[vertexMetadataServiceAccount])
@@ -344,7 +355,7 @@ func (e *vertexExecutor) resolveServiceAccount(auth *cliproxyauth.Auth) (*vertex
 	return &sa, nil
 }
 
-func (e *vertexExecutor) resolveEndpointSettings(auth *cliproxyauth.Auth, sa *vertexServiceAccount) (baseURL, project, location string) {
+func (e *VertexExecutor) resolveEndpointSettings(auth *cliproxyauth.Auth, sa *vertexServiceAccount) (baseURL, project, location string) {
 	baseURL = strings.TrimRight(strings.TrimSpace(e.baseURL), "/")
 	location = vertexDefaultLocation
 	if auth != nil {
@@ -373,7 +384,7 @@ func (e *vertexExecutor) resolveEndpointSettings(auth *cliproxyauth.Auth, sa *ve
 	return baseURL, project, location
 }
 
-func (e *vertexExecutor) cachedAccessToken(auth *cliproxyauth.Auth, now time.Time) (string, bool) {
+func (e *VertexExecutor) cachedAccessToken(auth *cliproxyauth.Auth, now time.Time) (string, bool) {
 	if auth == nil {
 		return "", false
 	}
@@ -386,11 +397,11 @@ func (e *vertexExecutor) cachedAccessToken(auth *cliproxyauth.Auth, now time.Tim
 	return "", false
 }
 
-func (e *vertexExecutor) tokenStillValid(metadata map[string]any, now time.Time) bool {
+func (e *VertexExecutor) tokenStillValid(metadata map[string]any, now time.Time) bool {
 	return metadataExpiryValid(metadata, vertexMetadataExpiresAt, now) || metadataExpiryValid(metadata, vertexMetadataExpired, now)
 }
 
-func (e *vertexExecutor) nestedTokenStillValid(metadata map[string]any, now time.Time) bool {
+func (e *VertexExecutor) nestedTokenStillValid(metadata map[string]any, now time.Time) bool {
 	tokenData := mapFromAny(nestedAny(metadata, vertexMetadataTokenData, ""))
 	if tokenData == nil {
 		return false
@@ -398,7 +409,7 @@ func (e *vertexExecutor) nestedTokenStillValid(metadata map[string]any, now time
 	return metadataExpiryValid(tokenData, vertexMetadataExpiresAt, now) || metadataExpiryValid(tokenData, vertexMetadataExpired, now)
 }
 
-func (e *vertexExecutor) refreshServiceAccountToken(ctx context.Context, sa *vertexServiceAccount) (*vertexTokenResponse, error) {
+func (e *VertexExecutor) refreshServiceAccountToken(ctx context.Context, sa *vertexServiceAccount) (*vertexTokenResponse, error) {
 	jwtAssertion, err := vertexSignedJWT(sa)
 	if err != nil {
 		return nil, err
@@ -436,7 +447,7 @@ func (e *vertexExecutor) refreshServiceAccountToken(ctx context.Context, sa *ver
 	return &tokenResp, nil
 }
 
-func (e *vertexExecutor) updatedTokenData(raw any, accessToken string, expiresAt time.Time, now time.Time) map[string]any {
+func (e *VertexExecutor) updatedTokenData(raw any, accessToken string, expiresAt time.Time, now time.Time) map[string]any {
 	tokenData := mapFromAny(raw)
 	if tokenData == nil {
 		tokenData = map[string]any{}
@@ -496,7 +507,7 @@ func parseVertexPrivateKey(raw string) (*rsa.PrivateKey, error) {
 
 func vertexRequestedModel(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) string {
 	model := geminiRequestedModel(req, opts)
-	return strings.TrimPrefix(strings.TrimSpace(model), proxyProviderVertex+"/")
+	return strings.TrimPrefix(strings.TrimSpace(model), providerVertex+"/")
 }
 
 func serviceAccountStringFromAny(raw any) string {
