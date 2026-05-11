@@ -1,0 +1,81 @@
+Task 10: sdk/store.go (auth.Store wrapper)
+===========================================
+
+Scenario 1: sdk/store.go implements cliproxyauth.Store
+------------------------------------------------------
+$ head -30 sdk/store.go
+package sdk
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/xxww0098/cpa-gateway/model"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+// postgresAuthStore implements cliproxyauth.Store using GORM/PostgreSQL.
+// It is an internal type; callers obtain a cliproxyauth.Store via NewStore.
+type postgresAuthStore struct {
+	db *gorm.DB
+}
+
+// NewStore returns a cliproxyauth.Store backed by PostgreSQL through GORM.
+// It persists SDK auth records into the `auth_records` table (see model.AuthRecord).
+func NewStore(db *gorm.DB) cliproxyauth.Store {
+	return &postgresAuthStore{db: db}
+}
+
+Methods implemented on postgresAuthStore:
+  - List(ctx context.Context) ([]*cliproxyauth.Auth, error)
+  - Save(ctx context.Context, auth *cliproxyauth.Auth) (string, error)
+  - Delete(ctx context.Context, id string) error
+
+Constructor `NewStore` returns `cliproxyauth.Store` interface type. All three
+Store interface methods (List/Save/Delete) are implemented on the unexported
+postgresAuthStore receiver.
+
+model.AuthRecord is used verbatim (not modified).
+
+Scenario 2: go build ./sdk/
+---------------------------
+$ go build ./sdk/
+(no output)
+Exit Code: 0
+
+Scenario 3: go build ./...
+--------------------------
+$ go build ./...
+(no output)
+Exit Code: 0
+
+Root store.go removed
+---------------------
+$ git status --short | grep store.go
+ D store.go
+
+GlobalStore (previously defined in store.go) relocated to main.go, with
+assignment switched from NewPostgresAuthStore(db) to sdk.NewStore(db).
+handler_proxy.go's InitSDK continues to read GlobalStore unchanged.
+
+$ grep -n "sdk.NewStore\|GlobalStore" main.go
+  (relevant lines)
+  var GlobalStore cliproxyauth.Store
+  GlobalStore = sdk.NewStore(db)
+  panelRouter.AuthStore = GlobalStore
+
+Note on go vet ./...
+--------------------
+Running `go vet ./...` surfaces one error in pricing/calculator_test.go
+referencing an undefined NewCalculator symbol. This file is UNTRACKED
+(`git status` shows `?? pricing/calculator_test.go`) and belongs to the
+in-flight Task 8 (which is still `- [ ]` in the plan). It is not
+introduced by Task 10 and `go vet` on the packages touched by Task 10
+passes cleanly:
+
+$ go vet ./sdk/ ./api/ ./model/ ./infra/ ./ledger/ ./executor/ ./authutil/ ./config/ .
+Exit Code: 0

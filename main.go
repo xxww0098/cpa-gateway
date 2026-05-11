@@ -11,11 +11,17 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/xxww0098/cpa-gateway/api"
 	"github.com/xxww0098/cpa-gateway/infra"
 	"github.com/xxww0098/cpa-gateway/ledger"
 	"github.com/xxww0098/cpa-gateway/pricing"
+	"github.com/xxww0098/cpa-gateway/sdk"
 )
+
+// GlobalStore persists SDK auth records in PostgreSQL. Set by run() once
+// the database is ready. It is consumed by handler_proxy.go's InitSDK.
+var GlobalStore cliproxyauth.Store
 
 const appVersion = "0.1.0"
 
@@ -57,7 +63,7 @@ func run(configPath string) error {
 	if err := AutoMigrate(db); err != nil {
 		return err
 	}
-	GlobalStore = NewPostgresAuthStore(db)
+	GlobalStore = sdk.NewStore(db)
 	if err := api.EnsureSubscriptionSeeds(db); err != nil {
 		return err
 	}
