@@ -1,0 +1,25 @@
+Task 9 — pricing/cache.go (ModelPriceCache)
+
+$ go build ./pricing/
+(exit 0)
+
+$ go build ./...
+(exit 0)
+
+$ go vet ./pricing/
+(exit 0)
+
+Acceptance criteria:
+- [x] `go build ./pricing/` exit 0
+- [x] Get 用 RLock (c.mu.RLock() in Get/List), Invalidate 用 Lock (c.mu.Lock() in Invalidate)
+
+Files added:
+- pricing/cache.go
+    * type ModelPriceCache struct { mu sync.RWMutex; items map[string]*model.ModelPrice }
+    * NewModelPriceCache(db *gorm.DB) (*ModelPriceCache, error) — initial full load
+    * (*ModelPriceCache).Get(modelID string) (*model.ModelPrice, bool) — RLock
+    * (*ModelPriceCache).Invalidate(db *gorm.DB) error — Lock, atomic swap
+    * (*ModelPriceCache).List() []*model.ModelPrice — RLock
+    * normalizeModelKey() — trim + ToLower, shared by Get/Invalidate for case-insensitive lookup
+
+Does NOT import cliproxy SDK.
