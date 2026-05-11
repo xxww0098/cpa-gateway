@@ -1,0 +1,59 @@
+server:
+  host: 127.0.0.1
+  port: 8888
+
+database:
+  host: 127.0.0.1
+  port: 5432
+  user: cpa_gateway
+  password: ""
+  dbname: cpa_gateway
+  sslmode: disable
+
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+auth:
+  admin_emails: []
+  jwt:
+    secret: ""
+    expiry_hours: 24
+
+sdk:
+  base_url: https://api.cliproxyapi.com
+  api_key: ""
+  timeout_seconds: 30
+  openai:
+    enabled: true
+    base_url: ""
+    api_key: ""
+  openai_compatible:
+    enabled: false
+    base_url: ""
+    api_key: ""
+  claude:
+    enabled: false
+    base_url: ""
+    api_key: ""
+  gemini:
+    enabled: false
+    base_url: ""
+    api_key: ""
+  codex:
+    enabled: false
+    base_url: ""
+    api_key: ""
+  vertex:
+    enabled: false
+    base_url: ""
+    api_key: ""
+
+frontend:
+  port: 3000
+
+billing:
+  hold_amount: 100
+  default_price_per_1k_tokens: 0.001
+  hold_ttl_seconds: 3600

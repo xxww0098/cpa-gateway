@@ -1,0 +1,104 @@
+import { Outlet, Navigate, useLocation } from 'react-router-dom'
+import { useCallback, useEffect, useRef } from 'react'
+import { Sidebar } from '@/shared/components/layout/Sidebar'
+import { Header } from '@/shared/components/layout/Header'
+import { useAuthStore } from '@/features/auth/auth_store'
+import { refreshCurrentUser } from '@/shared/api/client'
+import { useAppStore } from '@/shared/store/app_store'
+
+const adminRoutePrefixes = [
+  '/users',
+  '/channels',
+  '/billing',
+  '/usage-logs',
+  '/settings',
+  '/payment-config',
+  '/order-management',
+  '/admin/',
+]
+
+export default function UserLayout() {
+  const token = useAuthStore(s => s.token)
+  const user = useAuthStore(s => s.user)
+  const sidebarCollapsed = useAppStore(s => s.sidebarCollapsed)
+  const lastFetchRef = useRef(0)
+  const location = useLocation()
+
+  const refreshProfile = useCallback((force = false) => {
+    if (!token) return
+    const now = Date.now()
+    if (!force && now - lastFetchRef.current < 30_000) return
+    lastFetchRef.current = now
+    void refreshCurrentUser().catch(() => {})
+  }, [token])
+
+  // 路由切换时节流刷新 profile；余额相关操作会在成功回调中强制刷新。
+  useEffect(() => {
+    refreshProfile()
+  }, [location.pathname, refreshProfile])
+
+  useEffect(() => {
+    const refreshOnFocus = () => refreshProfile()
+    const refreshOnVisible = () => {
+      if (document.visibilityState === 'visible') refreshProfile()
+    }
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshProfile()
+    }, 30_000)
+
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnVisible)
+    return () => {
+      window.clearInterval(refreshTimer)
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnVisible)
+    }
+  }, [refreshProfile])
+
+  if (!token || !user) {
+    return <Navigate to="/login" replace />
+  }
+
+  const isAdminRoute = adminRoutePrefixes.some(prefix => location.pathname.startsWith(prefix))
+  if (isAdminRoute && user.role !== 'admin') {
+    return <AdminRouteForbidden />
+  }
+
+  return (
+    <div className="flex min-h-screen bg-gray-50 dark:bg-gray-950 font-sans">
+      {/* Sidebar */}
+      <Sidebar />
+
+      {/* Main Content Area */}
+      <div 
+        className={`flex-1 flex flex-col transition-all duration-300 ${
+          sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-60'
+        }`}
+      >
+        <Header />
+        
+        <main className="flex-1 overflow-x-hidden p-6 md:p-8">
+          <div className="max-w-7xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <Outlet />
+          </div>
+        </main>
+      </div>
+    </div>
+  )
+}
+
+function AdminRouteForbidden() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6 dark:bg-gray-950">
+      <section className="w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center shadow-sm dark:border-dark-800 dark:bg-dark-900">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-2xl font-semibold text-red-600 dark:bg-red-950/40 dark:text-red-300">
+          403
+        </div>
+        <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">无权访问管理页面</h1>
+        <p className="mt-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
+          当前账号没有管理员权限，请切换到管理员账号后再访问该页面。
+        </p>
+      </section>
+    </div>
+  )
+}
