@@ -1,0 +1,92 @@
+Task 13 — executor/usage_parser.go (5-provider token parsing) — TDD
+===================================================================
+
+Files created
+-------------
+- executor/usage_parser_test.go (9 named tests + empty-payload sub-cases)
+- executor/usage_parser.go      (5 parser funcs + local UsageTokens struct)
+
+Public API
+----------
+- type UsageTokens struct { Input, Output, Cached, Reasoning int64 }
+- func ParseOpenAIUsage(payload []byte) (UsageTokens, bool)
+- func ParseClaudeUsage(payload []byte) (UsageTokens, bool)
+- func ParseGeminiUsage(payload []byte) (UsageTokens, bool)
+- func ParseCodexUsage(payload []byte) (UsageTokens, bool)
+- func ParseVertexUsage(payload []byte) (UsageTokens, bool)
+
+UsageTokens lives in the executor package (not pricing) to avoid the
+executor -> pricing -> executor import cycle that Task 15-19 would
+otherwise introduce. Task 14 (sdk/usage.go) handles the conversion to
+pricing.UsageTokens via a simple field mapping.
+
+RED phase (pre-implementation)
+------------------------------
+$ go test ./executor/ -run TestParse -v -count=1
+# github.com/xxww0098/cpa-gateway/executor [github.com/xxww0098/cpa-gateway/executor.test]
+executor/usage_parser_test.go:20:16: undefined: ParseOpenAIUsage
+executor/usage_parser_test.go:52:18: undefined: ParseOpenAIUsage
+executor/usage_parser_test.go:56:18: undefined: UsageTokens
+...
+FAIL    github.com/xxww0098/cpa-gateway/executor [build failed]
+
+(Expected — usage_parser.go had not been created yet.)
+
+GREEN phase (post-implementation)
+---------------------------------
+$ go test ./executor/ -run TestParse -v -count=1
+=== RUN   TestParseOpenAIUsage_Full
+--- PASS: TestParseOpenAIUsage_Full (0.00s)
+=== RUN   TestParseOpenAIUsage_Empty
+=== RUN   TestParseOpenAIUsage_Empty/nil
+=== RUN   TestParseOpenAIUsage_Empty/empty
+=== RUN   TestParseOpenAIUsage_Empty/malformed
+=== RUN   TestParseOpenAIUsage_Empty/missing-usage
+=== RUN   TestParseOpenAIUsage_Empty/zero-usage
+=== RUN   TestParseOpenAIUsage_Empty/null-usage
+=== RUN   TestParseOpenAIUsage_Empty/wrong-top-type
+--- PASS: TestParseOpenAIUsage_Empty (0.00s)
+=== RUN   TestParseOpenAIUsage_Reasoning
+--- PASS: TestParseOpenAIUsage_Reasoning (0.00s)
+=== RUN   TestParseClaudeUsage_MessageDelta
+--- PASS: TestParseClaudeUsage_MessageDelta (0.00s)
+=== RUN   TestParseClaudeUsage_CacheCreation
+--- PASS: TestParseClaudeUsage_CacheCreation (0.00s)
+=== RUN   TestParseClaudeUsage_Empty
+=== RUN   TestParseClaudeUsage_Empty/nil
+=== RUN   TestParseClaudeUsage_Empty/empty
+=== RUN   TestParseClaudeUsage_Empty/malformed
+=== RUN   TestParseClaudeUsage_Empty/no-usage
+--- PASS: TestParseClaudeUsage_Empty (0.00s)
+=== RUN   TestParseGeminiUsage_WithThoughts
+--- PASS: TestParseGeminiUsage_WithThoughts (0.00s)
+=== RUN   TestParseGeminiUsage_Empty
+=== RUN   TestParseGeminiUsage_Empty/nil
+=== RUN   TestParseGeminiUsage_Empty/empty
+=== RUN   TestParseGeminiUsage_Empty/malformed
+=== RUN   TestParseGeminiUsage_Empty/no-meta
+=== RUN   TestParseGeminiUsage_Empty/empty-meta
+--- PASS: TestParseGeminiUsage_Empty (0.00s)
+=== RUN   TestParseCodexUsage_Body
+--- PASS: TestParseCodexUsage_Body (0.00s)
+=== RUN   TestParseVertexUsage
+--- PASS: TestParseVertexUsage (0.00s)
+PASS
+ok      github.com/xxww0098/cpa-gateway/executor        0.493s
+
+Full module build
+-----------------
+$ go build ./...
+(exit 0, no output)
+
+Acceptance Criteria
+-------------------
+[x] executor/usage_parser_test.go has >=9 named tests (9 functions,
+    several with table-driven sub-cases for empty/malformed payloads).
+[x] `go test ./executor/ -run TestParse -v` PASS (9/9, plus sub-cases).
+[x] Empty payload (nil, []byte{}, malformed JSON) returns zero value +
+    false and does NOT panic (explicitly exercised in *_Empty tests).
+[x] Implementation uses only `encoding/json` + `bytes` from stdlib — no
+    SDK imports (verified by reading the file).
+[x] Existing 5 executor files (openai/claude/gemini/codex/vertex.go) are
+    NOT modified. Integration happens in Task 15-19 after Task 14.
