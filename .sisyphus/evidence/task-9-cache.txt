@@ -1,0 +1,55 @@
+Task 9 — pricing/cache.go (ModelPriceCache)
+===========================================
+
+File: pricing/cache.go
+Module: github.com/xxww0098/cpa-gateway
+
+Acceptance checks
+-----------------
+
+1. `go build ./pricing/`
+   $ go build ./pricing/
+   (no output)
+   exit=0  ✔
+
+2. `go vet ./pricing/`
+   $ go vet ./pricing/
+   (no output)
+   exit=0  ✔
+
+3. No cliproxy SDK imports in ./pricing/
+   $ grep -rn cliproxy ./pricing/
+   (no matches)
+   exit=1  ✔  (ripgrep-style exit 1 == zero matches)
+
+4. Lock discipline (spec: Get uses RLock, Invalidate uses Lock)
+   $ grep -n -E "RLock|Lock" pricing/cache.go
+   46:     c.mu.RLock()      <- Get
+   75:     c.mu.Lock()       <- Invalidate
+   85:     c.mu.RLock()      <- List
+   ✔ Get/List acquire the RWMutex for read only
+   ✔ Invalidate acquires the RWMutex for write
+
+Surface area (matches spec)
+---------------------------
+
+type ModelPriceCache struct {
+    mu    sync.RWMutex
+    items map[string]*model.ModelPrice
+}
+
+func NewModelPriceCache(db *gorm.DB) (*ModelPriceCache, error)
+func (c *ModelPriceCache) Get(modelID string) (*model.ModelPrice, bool)
+func (c *ModelPriceCache) Invalidate(db *gorm.DB) error
+func (c *ModelPriceCache) List() []*model.ModelPrice
+
+Design notes
+------------
+- Keys are normalized via strings.ToLower(strings.TrimSpace(modelID)) so
+  lookups tolerate casing/whitespace drift from upstream model IDs.
+- Invalidate builds the replacement map outside the critical section and
+  swaps it under Lock, so readers never observe a torn snapshot.
+- Invalidate on nil db returns gorm.ErrInvalidDB and preserves the prior
+  snapshot.
+- No goroutines, no timers — refresh is strictly manual, driven by admin
+  handlers (per design).
