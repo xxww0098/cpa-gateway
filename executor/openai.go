@@ -14,6 +14,7 @@ import (
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 // OpenAICompatibleExecutor implements cliproxyauth.ProviderExecutor for any
@@ -55,6 +56,7 @@ func (e *OpenAICompatibleExecutor) Identifier() string {
 
 func (e *OpenAICompatibleExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
+	startedAt := time.Now().UTC()
 	resp, err := e.doChatCompletionsRequest(ctx, req, opts, apiKey, baseURL)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -72,7 +74,13 @@ func (e *OpenAICompatibleExecutor) Execute(ctx context.Context, auth *cliproxyau
 			"status_code": resp.StatusCode,
 		},
 	}
-	if resp.StatusCode >= http.StatusBadRequest {
+	failed := resp.StatusCode >= http.StatusBadRequest
+	tokens, ok := ParseOpenAIUsage(payload)
+	if ok {
+		wrapped.Metadata["usage"] = tokens
+	}
+	e.publishUsage(ctx, auth, req, opts, tokens, ok, failed, resp.StatusCode, payload, startedAt)
+	if failed {
 		return wrapped, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 	return wrapped, nil
@@ -80,13 +88,17 @@ func (e *OpenAICompatibleExecutor) Execute(ctx context.Context, auth *cliproxyau
 
 func (e *OpenAICompatibleExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
-	resp, err := e.doChatCompletionsRequest(ctx, req, opts, apiKey, baseURL)
+	streamOpts := opts
+	streamOpts.Stream = true
+	startedAt := time.Now().UTC()
+	resp, err := e.doChatCompletionsRequest(ctx, req, streamOpts, apiKey, baseURL)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(resp.Body)
+		e.publishUsage(ctx, auth, req, streamOpts, UsageTokens{}, false, true, resp.StatusCode, payload, startedAt)
 		return nil, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 
@@ -95,23 +107,30 @@ func (e *OpenAICompatibleExecutor) ExecuteStream(ctx context.Context, auth *clip
 		defer close(chunks)
 		defer resp.Body.Close()
 
+		var accumulator bytes.Buffer
+		var streamErr error
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
+				accumulator.Write(payload)
 				select {
 				case <-ctx.Done():
-					chunks <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
+					streamErr = ctx.Err()
+					chunks <- cliproxyexecutor.StreamChunk{Err: streamErr}
+					e.publishStreamUsage(ctx, auth, req, streamOpts, accumulator.Bytes(), true, 0, startedAt)
 					return
 				case chunks <- cliproxyexecutor.StreamChunk{Payload: payload}:
 				}
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
+					streamErr = err
 					chunks <- cliproxyexecutor.StreamChunk{Err: err}
 				}
+				e.publishStreamUsage(ctx, auth, req, streamOpts, accumulator.Bytes(), streamErr != nil, resp.StatusCode, startedAt)
 				return
 			}
 		}
@@ -219,4 +238,119 @@ func (e *OpenAICompatibleExecutor) chatCompletionsEndpoint(query url.Values, bas
 		parsed.RawQuery = values.Encode()
 	}
 	return parsed.String(), nil
+}
+
+// openAIRequestedModel resolves the upstream-facing model name for a request.
+// It prefers the translated Request.Model and falls back to the
+// `requested_model` hint stored by the SDK router on either Request or
+// Options metadata.
+func openAIRequestedModel(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) string {
+	if strings.TrimSpace(req.Model) != "" {
+		return strings.TrimSpace(req.Model)
+	}
+	if value := stringFromMap(req.Metadata, cliproxyexecutor.RequestedModelMetadataKey); value != "" {
+		return value
+	}
+	return stringFromMap(opts.Metadata, cliproxyexecutor.RequestedModelMetadataKey)
+}
+
+// publishUsage emits a usage.Record to the SDK default manager. OpenAI
+// Chat Completions surface usage through the top-level `usage` envelope on
+// non-stream responses and on the terminal streaming chunk when
+// `stream_options.include_usage=true`. ParseOpenAIUsage normalizes both
+// shapes into UsageTokens. When parsing fails the record is still published
+// with zero Detail so downstream UsagePlugin can fall back to heuristic
+// accounting.
+func (e *OpenAICompatibleExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+	rec := cliproxyusage.Record{
+		Provider:    e.provider,
+		Model:       openAIRequestedModel(req, opts),
+		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
+		Source:      e.provider,
+		RequestedAt: startedAt,
+		Latency:     time.Since(startedAt),
+		Failed:      failed,
+	}
+	if auth != nil {
+		rec.AuthID = auth.ID
+		rec.AuthIndex = auth.Index
+		rec.AuthType = auth.Provider
+	}
+	if parsed {
+		rec.Detail = cliproxyusage.Detail{
+			InputTokens:     tokens.Input,
+			OutputTokens:    tokens.Output,
+			ReasoningTokens: tokens.Reasoning,
+			CachedTokens:    tokens.Cached,
+			TotalTokens:     tokens.Input + tokens.Output,
+		}
+	}
+	if failed {
+		rec.Fail = cliproxyusage.Failure{
+			StatusCode: status,
+			Body:       truncateOpenAIFailureBody(payload),
+		}
+	}
+	cliproxyusage.PublishRecord(ctx, rec)
+}
+
+// publishStreamUsage parses the accumulated SSE body and delegates to
+// publishUsage. OpenAI streams end with `data: [DONE]`; the penultimate
+// `data: {json}` event carries the aggregate `usage` envelope when the
+// client opts into `stream_options.include_usage=true`. We walk every
+// `data: {json}` line, parse each via ParseOpenAIUsage, and keep the last
+// successful parse so the final usage totals win.
+func (e *OpenAICompatibleExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, body []byte, failed bool, status int, startedAt time.Time) {
+	tokens, ok := UsageTokens{}, false
+	if len(body) > 0 {
+		tokens, ok = parseOpenAIStreamUsage(body)
+	}
+	e.publishUsage(ctx, auth, req, opts, tokens, ok, failed, status, nil, startedAt)
+}
+
+// parseOpenAIStreamUsage scans an OpenAI-style SSE buffer for the last
+// `data: {...}` event that carries a non-nil `usage` envelope. The stream
+// format is:
+//
+//	data: {"choices":[...]}\n\n
+//	data: {"choices":[...],"usage":{...}}\n\n
+//	data: [DONE]\n\n
+//
+// Only the final usage-bearing JSON event matters; earlier deltas either
+// omit usage entirely or carry partial counts. Falls back to parsing the
+// whole buffer (non-stream path) when no SSE framing is detected.
+func parseOpenAIStreamUsage(body []byte) (UsageTokens, bool) {
+	// Fast path: plain JSON body with top-level usage (non-SSE).
+	if tokens, ok := ParseOpenAIUsage(body); ok {
+		return tokens, true
+	}
+	var (
+		last UsageTokens
+		got  bool
+	)
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(trimmed[len("data:"):])
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		if tokens, ok := ParseOpenAIUsage(payload); ok {
+			last = tokens
+			got = true
+		}
+	}
+	return last, got
+}
+
+// truncateOpenAIFailureBody clips the failure payload so usage.Record.Fail.Body
+// stays bounded. 4 KiB is more than enough for provider error envelopes.
+func truncateOpenAIFailureBody(payload []byte) string {
+	const max = 4 * 1024
+	if len(payload) <= max {
+		return string(payload)
+	}
+	return string(payload[:max])
 }
