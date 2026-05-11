@@ -1,8 +1,8 @@
-package main
+package api
 
 import "github.com/gin-gonic/gin"
 
-// APIResponse is the unified JSON response envelope.
+// APIResponse is the unified JSON response envelope shared by all panel handlers.
 type APIResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`

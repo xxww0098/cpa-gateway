@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -83,9 +83,9 @@ type sdkMgmtOAuthTokenResponse struct {
 	Raw          map[string]any `json:"-"`
 }
 
-func loadAmpcodeConfig(ctx context.Context) (map[string]any, error) {
+func (pr *PanelRouter) loadAmpcodeConfig(ctx context.Context) (map[string]any, error) {
 	var cfg model.AmpcodeConfig
-	err := GlobalDB.WithContext(ctx).First(&cfg, 1).Error
+	err := pr.DB.WithContext(ctx).First(&cfg, 1).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return make(map[string]any), nil
@@ -101,12 +101,12 @@ func loadAmpcodeConfig(ctx context.Context) (map[string]any, error) {
 	return m, nil
 }
 
-func saveAmpcodeConfig(ctx context.Context, m map[string]any) error {
+func (pr *PanelRouter) saveAmpcodeConfig(ctx context.Context, m map[string]any) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	db := GlobalDB.WithContext(ctx)
+	db := pr.DB.WithContext(ctx)
 	result := db.Model(&model.AmpcodeConfig{}).Where("id = 1").Update("config_data", data)
 	if result.Error != nil {
 		return result.Error
@@ -157,119 +157,119 @@ func normalizeAmpcodeResponse(m map[string]any) map[string]any {
 // at /api/panel/admin/sdk-management (via authedPanel.Group).
 // Static routes are registered before parameterized /:provider routes
 // so that Gin's radix tree matches them first.
-func RegisterSDKManagementRoutes(rg *gin.RouterGroup) {
+func (pr *PanelRouter) RegisterSDKManagementRoutes(rg *gin.RouterGroup) {
 	// ── Static routes (register before /:provider) ──
-	rg.GET("/api-key-usage", SDKMgmtAPIKeyUsageHandler)
+	rg.GET("/api-key-usage", pr.SDKMgmtAPIKeyUsageHandler)
 
-	rg.GET("/auth-files", SDKMgmtAuthFilesListHandler)
-	rg.POST("/auth-files", SDKMgmtAuthFilesCreateHandler)
-	rg.PUT("/auth-files", SDKMgmtAuthFilesUpdateHandler)
-	rg.DELETE("/auth-files", SDKMgmtAuthFilesDeleteHandler)
-	rg.GET("/auth-files/quota", SDKMgmtAuthFilesQuotaHandler)
-	rg.GET("/auth-files/models", SDKMgmtAuthFilesModelsHandler)
+	rg.GET("/auth-files", pr.SDKMgmtAuthFilesListHandler)
+	rg.POST("/auth-files", pr.SDKMgmtAuthFilesCreateHandler)
+	rg.PUT("/auth-files", pr.SDKMgmtAuthFilesUpdateHandler)
+	rg.DELETE("/auth-files", pr.SDKMgmtAuthFilesDeleteHandler)
+	rg.GET("/auth-files/quota", pr.SDKMgmtAuthFilesQuotaHandler)
+	rg.GET("/auth-files/models", pr.SDKMgmtAuthFilesModelsHandler)
 
-	rg.GET("/oauth-sessions", SDKMgmtOAuthSessionsHandler)
-	rg.GET("/get-auth-status", SDKMgmtOAuthStatusHandler)
+	rg.GET("/oauth-sessions", pr.SDKMgmtOAuthSessionsHandler)
+	rg.GET("/get-auth-status", pr.SDKMgmtOAuthStatusHandler)
 
-	rg.POST("/oauth-callback/:provider", SDKMgmtOAuthCallbackHandler)
+	rg.POST("/oauth-callback/:provider", pr.SDKMgmtOAuthCallbackHandler)
 
-	rg.GET("/ampcode", SDKMgmtAmpcodeGetHandler)
-	rg.PUT("/ampcode", SDKMgmtAmpcodePutHandler)
+	rg.GET("/ampcode", pr.SDKMgmtAmpcodeGetHandler)
+	rg.PUT("/ampcode", pr.SDKMgmtAmpcodePutHandler)
 
-	rg.GET("/ampcode/model-mappings", SDKMgmtAmpcodeModelMappingsGetHandler)
-	rg.PUT("/ampcode/model-mappings", SDKMgmtAmpcodeModelMappingsPutHandler)
-	rg.DELETE("/ampcode/model-mappings", SDKMgmtAmpcodeModelMappingsDeleteHandler)
+	rg.GET("/ampcode/model-mappings", pr.SDKMgmtAmpcodeModelMappingsGetHandler)
+	rg.PUT("/ampcode/model-mappings", pr.SDKMgmtAmpcodeModelMappingsPutHandler)
+	rg.DELETE("/ampcode/model-mappings", pr.SDKMgmtAmpcodeModelMappingsDeleteHandler)
 
-	rg.GET("/ampcode/upstream-api-keys", SDKMgmtAmpcodeUpstreamAPIKeysGetHandler)
-	rg.PUT("/ampcode/upstream-api-keys", SDKMgmtAmpcodeUpstreamAPIKeysPutHandler)
-	rg.DELETE("/ampcode/upstream-api-keys", SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler)
+	rg.GET("/ampcode/upstream-api-keys", pr.SDKMgmtAmpcodeUpstreamAPIKeysGetHandler)
+	rg.PUT("/ampcode/upstream-api-keys", pr.SDKMgmtAmpcodeUpstreamAPIKeysPutHandler)
+	rg.DELETE("/ampcode/upstream-api-keys", pr.SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler)
 
-	rg.PUT("/ampcode/upstream-url", SDKMgmtAmpcodeUpstreamURLPutHandler)
-	rg.DELETE("/ampcode/upstream-url", SDKMgmtAmpcodeUpstreamURLDeleteHandler)
+	rg.PUT("/ampcode/upstream-url", pr.SDKMgmtAmpcodeUpstreamURLPutHandler)
+	rg.DELETE("/ampcode/upstream-url", pr.SDKMgmtAmpcodeUpstreamURLDeleteHandler)
 
-	rg.PUT("/ampcode/upstream-api-key", SDKMgmtAmpcodeUpstreamAPIKeyPutHandler)
-	rg.DELETE("/ampcode/upstream-api-key", SDKMgmtAmpcodeUpstreamAPIKeyDeleteHandler)
+	rg.PUT("/ampcode/upstream-api-key", pr.SDKMgmtAmpcodeUpstreamAPIKeyPutHandler)
+	rg.DELETE("/ampcode/upstream-api-key", pr.SDKMgmtAmpcodeUpstreamAPIKeyDeleteHandler)
 
 	// ── SDK Config ──
-	rg.GET("/config", SDKMgmtConfigGetHandler)
-	rg.PUT("/config", SDKMgmtConfigPutHandler)
+	rg.GET("/config", pr.SDKMgmtConfigGetHandler)
+	rg.PUT("/config", pr.SDKMgmtConfigPutHandler)
 
 	// ── Convenience config key endpoints ──
-	rg.GET("/debug", sdkMgmtConfigGetHandlerFn("debug"))
-	rg.PUT("/debug", sdkMgmtConfigSetHandlerFn("debug"))
-	rg.GET("/routing/strategy", sdkMgmtConfigGetRoutingStrategyFn())
-	rg.PUT("/routing/strategy", sdkMgmtConfigSetHandlerFn("routing-strategy"))
-	rg.GET("/force-model-prefix", sdkMgmtConfigGetForceModelPrefixFn())
-	rg.PUT("/force-model-prefix", sdkMgmtConfigSetHandlerFn("force-model-prefix"))
-	rg.GET("/logs-max-total-size-mb", sdkMgmtConfigGetLogsMaxSizeFn())
-	rg.PUT("/logs-max-total-size-mb", sdkMgmtConfigSetHandlerFn("logs-max-total-size-mb"))
-	rg.GET("/request-retry", sdkMgmtConfigGetHandlerFn("request-retry"))
-	rg.PUT("/request-retry", sdkMgmtConfigSetHandlerFn("request-retry"))
-	rg.GET("/max-retry-interval", sdkMgmtConfigGetHandlerFn("max-retry-interval"))
-	rg.PUT("/max-retry-interval", sdkMgmtConfigSetHandlerFn("max-retry-interval"))
-	rg.PUT("/proxy-url", sdkMgmtConfigSetHandlerFn("proxy-url"))
-	rg.DELETE("/proxy-url", sdkMgmtConfigDeleteHandlerFn("proxy-url"))
-	rg.GET("/request-log", sdkMgmtConfigGetHandlerFn("request-log"))
-	rg.PUT("/request-log", sdkMgmtConfigSetHandlerFn("request-log"))
-	rg.GET("/logging-to-file", sdkMgmtConfigGetHandlerFn("logging-to-file"))
-	rg.PUT("/logging-to-file", sdkMgmtConfigSetHandlerFn("logging-to-file"))
-	rg.GET("/ws-auth", sdkMgmtConfigGetHandlerFn("ws-auth"))
-	rg.PUT("/ws-auth", sdkMgmtConfigSetHandlerFn("ws-auth"))
-	rg.GET("/usage-statistics-enabled", sdkMgmtConfigGetHandlerFn("usage-statistics-enabled"))
-	rg.PUT("/usage-statistics-enabled", sdkMgmtConfigSetHandlerFn("usage-statistics-enabled"))
+	rg.GET("/debug", pr.sdkMgmtConfigGetHandlerFn("debug"))
+	rg.PUT("/debug", pr.sdkMgmtConfigSetHandlerFn("debug"))
+	rg.GET("/routing/strategy", pr.sdkMgmtConfigGetRoutingStrategyFn())
+	rg.PUT("/routing/strategy", pr.sdkMgmtConfigSetHandlerFn("routing-strategy"))
+	rg.GET("/force-model-prefix", pr.sdkMgmtConfigGetForceModelPrefixFn())
+	rg.PUT("/force-model-prefix", pr.sdkMgmtConfigSetHandlerFn("force-model-prefix"))
+	rg.GET("/logs-max-total-size-mb", pr.sdkMgmtConfigGetLogsMaxSizeFn())
+	rg.PUT("/logs-max-total-size-mb", pr.sdkMgmtConfigSetHandlerFn("logs-max-total-size-mb"))
+	rg.GET("/request-retry", pr.sdkMgmtConfigGetHandlerFn("request-retry"))
+	rg.PUT("/request-retry", pr.sdkMgmtConfigSetHandlerFn("request-retry"))
+	rg.GET("/max-retry-interval", pr.sdkMgmtConfigGetHandlerFn("max-retry-interval"))
+	rg.PUT("/max-retry-interval", pr.sdkMgmtConfigSetHandlerFn("max-retry-interval"))
+	rg.PUT("/proxy-url", pr.sdkMgmtConfigSetHandlerFn("proxy-url"))
+	rg.DELETE("/proxy-url", pr.sdkMgmtConfigDeleteHandlerFn("proxy-url"))
+	rg.GET("/request-log", pr.sdkMgmtConfigGetHandlerFn("request-log"))
+	rg.PUT("/request-log", pr.sdkMgmtConfigSetHandlerFn("request-log"))
+	rg.GET("/logging-to-file", pr.sdkMgmtConfigGetHandlerFn("logging-to-file"))
+	rg.PUT("/logging-to-file", pr.sdkMgmtConfigSetHandlerFn("logging-to-file"))
+	rg.GET("/ws-auth", pr.sdkMgmtConfigGetHandlerFn("ws-auth"))
+	rg.PUT("/ws-auth", pr.sdkMgmtConfigSetHandlerFn("ws-auth"))
+	rg.GET("/usage-statistics-enabled", pr.sdkMgmtConfigGetHandlerFn("usage-statistics-enabled"))
+	rg.PUT("/usage-statistics-enabled", pr.sdkMgmtConfigSetHandlerFn("usage-statistics-enabled"))
 
 	// ── Logs ──
-	rg.GET("/logs", SDKMgmtLogsHandler)
-	rg.DELETE("/logs", SDKMgmtLogsDeleteHandler)
-	rg.GET("/request-error-logs", SDKMgmtRequestErrorLogsHandler)
-	rg.DELETE("/request-error-logs", SDKMgmtRequestErrorLogsDeleteHandler)
+	rg.GET("/logs", pr.SDKMgmtLogsHandler)
+	rg.DELETE("/logs", pr.SDKMgmtLogsDeleteHandler)
+	rg.GET("/request-error-logs", pr.SDKMgmtRequestErrorLogsHandler)
+	rg.DELETE("/request-error-logs", pr.SDKMgmtRequestErrorLogsDeleteHandler)
 
 	// ── Model Definitions ──
-	rg.GET("/model-definitions/:channel", SDKMgmtModelDefinitionsHandler)
+	rg.GET("/model-definitions/:channel", pr.SDKMgmtModelDefinitionsHandler)
 
 	// ── Parameterized provider routes (static routes registered above) ──
-	rg.GET("/:provider", SDKMgmtProviderGetHandler)
-	rg.POST("/:provider", SDKMgmtProviderPostHandler) // also handles :provider-auth-url
-	rg.PUT("/:provider", SDKMgmtProviderPutHandler)
-	rg.DELETE("/:provider", SDKMgmtProviderDeleteHandler)
+	rg.GET("/:provider", pr.SDKMgmtProviderGetHandler)
+	rg.POST("/:provider", pr.SDKMgmtProviderPostHandler) // also handles :provider-auth-url
+	rg.PUT("/:provider", pr.SDKMgmtProviderPutHandler)
+	rg.DELETE("/:provider", pr.SDKMgmtProviderDeleteHandler)
 }
 
 // ── Provider API Key Pool Handlers ──
 
-func SDKMgmtProviderGetHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtProviderGetHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	endpoint, provider, ok := sdkMgmtProviderFromRequest(c)
+	endpoint, provider, ok := pr.sdkMgmtProviderFromRequest(c)
 	if !ok {
 		return
 	}
-	auths, ok := sdkMgmtProviderAuths(c, provider)
+	auths, ok := pr.sdkMgmtProviderAuths(c, provider)
 	if !ok {
 		return
 	}
 	Success(c, gin.H{endpoint: sdkMgmtSerializeAuths(auths)})
 }
 
-func SDKMgmtProviderPostHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtProviderPostHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	provider := c.Param("provider")
 	// POST /:provider with -auth-url suffix → OAuth URL generation (single-route
 	// dispatch avoids Gin parameter conflict between /:provider and /:provider-auth-url).
 	if strings.HasSuffix(provider, "-auth-url") {
-		sdkMgmtOAuthAuthURLHandler(c, provider)
+		pr.sdkMgmtOAuthAuthURLHandler(c, provider)
 		return
 	}
-	_, sdkProvider, ok := sdkMgmtProviderFromRequest(c)
+	_, sdkProvider, ok := pr.sdkMgmtProviderFromRequest(c)
 	if !ok {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
-	items, ok := sdkMgmtParseProviderPayload(c)
+	items, ok := pr.sdkMgmtParseProviderPayload(c)
 	if !ok {
 		return
 	}
@@ -279,7 +279,7 @@ func SDKMgmtProviderPostHandler(c *gin.Context) {
 			continue
 		}
 		auth := sdkMgmtAuthFromPayload(sdkProvider, item, nil)
-		registered, err := authManager.Register(c.Request.Context(), auth)
+		registered, err := pr.AuthManager.Register(c.Request.Context(), auth)
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5001, "failed to register provider API key")
 			return
@@ -293,29 +293,29 @@ func SDKMgmtProviderPostHandler(c *gin.Context) {
 	Success(c, gin.H{"items": created, "message": "created"})
 }
 
-func SDKMgmtProviderPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtProviderPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	_, sdkProvider, ok := sdkMgmtProviderFromRequest(c)
+	_, sdkProvider, ok := pr.sdkMgmtProviderFromRequest(c)
 	if !ok {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
-	items, ok := sdkMgmtParseProviderPayload(c)
+	items, ok := pr.sdkMgmtParseProviderPayload(c)
 	if !ok {
 		return
 	}
 	updated := make([]gin.H, 0, len(items))
 	for index, item := range items {
-		existing, found := sdkMgmtFindProviderAuth(sdkProvider, item, index)
+		existing, found := pr.sdkMgmtFindProviderAuth(sdkProvider, item, index)
 		if !found {
 			continue
 		}
 		next := sdkMgmtAuthFromPayload(sdkProvider, item, existing)
-		saved, err := authManager.Update(c.Request.Context(), next)
+		saved, err := pr.AuthManager.Update(c.Request.Context(), next)
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5002, "failed to update provider API key")
 			return
@@ -329,22 +329,22 @@ func SDKMgmtProviderPutHandler(c *gin.Context) {
 	Success(c, gin.H{"items": updated, "message": "updated"})
 }
 
-func SDKMgmtProviderDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtProviderDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	_, sdkProvider, ok := sdkMgmtProviderFromRequest(c)
+	_, sdkProvider, ok := pr.sdkMgmtProviderFromRequest(c)
 	if !ok {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
-	items, isArray, ok := sdkMgmtParseProviderDeletePayload(c)
+	items, isArray, ok := pr.sdkMgmtParseProviderDeletePayload(c)
 	if !ok {
 		return
 	}
-	deleted, tombstoned := sdkMgmtDeleteProviderAuths(c.Request.Context(), sdkProvider, items, isArray)
+	deleted, tombstoned := pr.sdkMgmtDeleteProviderAuths(c.Request.Context(), sdkProvider, items, isArray)
 	if len(deleted) == 0 && len(tombstoned) == 0 {
 		Error(c, http.StatusNotFound, 4042, "provider API key not found")
 		return
@@ -361,15 +361,15 @@ func SDKMgmtProviderDeleteHandler(c *gin.Context) {
 
 // ── API Key Usage ──
 
-func SDKMgmtAPIKeyUsageHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAPIKeyUsageHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
 	usage := gin.H{}
-	for _, auth := range authManager.List() {
+	for _, auth := range pr.AuthManager.List() {
 		if auth == nil || sdkMgmtAuthDeleted(auth) {
 			continue
 		}
@@ -393,7 +393,7 @@ func SDKMgmtAPIKeyUsageHandler(c *gin.Context) {
 	Success(c, usage)
 }
 
-func sdkMgmtProviderFromRequest(c *gin.Context) (string, string, bool) {
+func (pr *PanelRouter) sdkMgmtProviderFromRequest(c *gin.Context) (string, string, bool) {
 	endpoint := strings.TrimSpace(c.Param("provider"))
 	provider, ok := sdkMgmtProviderEndpoints[endpoint]
 	if !ok {
@@ -403,7 +403,7 @@ func sdkMgmtProviderFromRequest(c *gin.Context) (string, string, bool) {
 	return endpoint, provider, true
 }
 
-func sdkMgmtAuthURLProviderSupported(c *gin.Context, authURLProvider string) bool {
+func (pr *PanelRouter) sdkMgmtAuthURLProviderSupported(c *gin.Context, authURLProvider string) bool {
 	if _, ok := sdkMgmtAuthURLProviders[strings.TrimSpace(authURLProvider)]; !ok {
 		Error(c, http.StatusNotFound, 4040, "unknown auth-url provider")
 		return false
@@ -429,20 +429,20 @@ func sdkMgmtUsageBucket(usage gin.H, key string) gin.H {
 	return bucket
 }
 
-func sdkMgmtEnsureManager(c *gin.Context) bool {
-	if authManager == nil {
+func (pr *PanelRouter) sdkMgmtEnsureManager(c *gin.Context) bool {
+	if pr.AuthManager == nil {
 		Error(c, http.StatusServiceUnavailable, 5031, "SDK auth manager is not initialized")
 		return false
 	}
 	return true
 }
 
-func sdkMgmtProviderAuths(c *gin.Context, provider string) ([]*cliproxyauth.Auth, bool) {
-	if !sdkMgmtEnsureManager(c) {
+func (pr *PanelRouter) sdkMgmtProviderAuths(c *gin.Context, provider string) ([]*cliproxyauth.Auth, bool) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return nil, false
 	}
 	auths := make([]*cliproxyauth.Auth, 0)
-	for _, auth := range authManager.List() {
+	for _, auth := range pr.AuthManager.List() {
 		if auth != nil && auth.Provider == provider && !sdkMgmtAuthDeleted(auth) {
 			auths = append(auths, auth)
 		}
@@ -496,7 +496,7 @@ func sdkMgmtSerializeAuth(auth *cliproxyauth.Auth, index int) gin.H {
 	}
 }
 
-func sdkMgmtParseProviderPayload(c *gin.Context) ([]map[string]any, bool) {
+func (pr *PanelRouter) sdkMgmtParseProviderPayload(c *gin.Context) ([]map[string]any, bool) {
 	var raw any
 	if err := c.ShouldBindJSON(&raw); err != nil {
 		Error(c, http.StatusBadRequest, 4000, "invalid JSON payload")
@@ -526,7 +526,7 @@ func sdkMgmtPayloadItems(raw any) []map[string]any {
 	}
 }
 
-func sdkMgmtParseProviderDeletePayload(c *gin.Context) ([]map[string]any, bool, bool) {
+func (pr *PanelRouter) sdkMgmtParseProviderDeletePayload(c *gin.Context) ([]map[string]any, bool, bool) {
 	var raw any
 	if err := c.ShouldBindJSON(&raw); err != nil {
 		Error(c, http.StatusBadRequest, 4000, "invalid JSON payload")
@@ -655,16 +655,16 @@ func sdkMgmtAuthFromPayload(provider string, item map[string]any, existing *clip
 	return auth
 }
 
-func sdkMgmtFindProviderAuth(provider string, item map[string]any, index int) (*cliproxyauth.Auth, bool) {
-	if authManager == nil {
+func (pr *PanelRouter) sdkMgmtFindProviderAuth(provider string, item map[string]any, index int) (*cliproxyauth.Auth, bool) {
+	if pr.AuthManager == nil {
 		return nil, false
 	}
 	if id := sdkMgmtString(item, "id", "auth_id"); id != "" {
-		if auth, ok := authManager.GetByID(id); ok && auth.Provider == provider && !sdkMgmtAuthDeleted(auth) {
+		if auth, ok := pr.AuthManager.GetByID(id); ok && auth.Provider == provider && !sdkMgmtAuthDeleted(auth) {
 			return auth, true
 		}
 	}
-	auths := authManager.List()
+	auths := pr.AuthManager.List()
 	sort.SliceStable(auths, func(i, j int) bool { return auths[i].CreatedAt.Before(auths[j].CreatedAt) })
 	name := sdkMgmtString(item, "name", "label")
 	for _, auth := range auths {
@@ -688,23 +688,23 @@ func sdkMgmtFindProviderAuth(provider string, item map[string]any, index int) (*
 	return nil, false
 }
 
-func sdkMgmtDeleteProviderAuths(ctx context.Context, provider string, items []map[string]any, desiredStateArray bool) ([]string, []string) {
+func (pr *PanelRouter) sdkMgmtDeleteProviderAuths(ctx context.Context, provider string, items []map[string]any, desiredStateArray bool) ([]string, []string) {
 	deleteIDs := map[string]bool{}
 	if desiredStateArray {
 		remaining := map[string]bool{}
 		for index, item := range items {
-			if auth, ok := sdkMgmtFindProviderAuth(provider, item, index); ok {
+			if auth, ok := pr.sdkMgmtFindProviderAuth(provider, item, index); ok {
 				remaining[auth.ID] = true
 			}
 		}
-		for _, auth := range authManager.List() {
+		for _, auth := range pr.AuthManager.List() {
 			if auth != nil && auth.Provider == provider && !sdkMgmtAuthDeleted(auth) && !remaining[auth.ID] {
 				deleteIDs[auth.ID] = true
 			}
 		}
 	} else {
 		for index, item := range items {
-			if auth, ok := sdkMgmtFindProviderAuth(provider, item, index); ok {
+			if auth, ok := pr.sdkMgmtFindProviderAuth(provider, item, index); ok {
 				deleteIDs[auth.ID] = true
 			}
 		}
@@ -712,7 +712,7 @@ func sdkMgmtDeleteProviderAuths(ctx context.Context, provider string, items []ma
 	deleted := make([]string, 0, len(deleteIDs))
 	disabled := make([]string, 0)
 	for id := range deleteIDs {
-		if auth, ok := authManager.GetByID(id); ok {
+		if auth, ok := pr.AuthManager.GetByID(id); ok {
 			if auth.Attributes == nil {
 				auth.Attributes = map[string]string{}
 			}
@@ -725,11 +725,11 @@ func sdkMgmtDeleteProviderAuths(ctx context.Context, provider string, items []ma
 			auth.Metadata["deleted"] = true
 			auth.Metadata["deleted_at"] = time.Now().UTC().Format(time.RFC3339)
 			auth.UpdatedAt = time.Now().UTC()
-			_, _ = authManager.Update(ctx, auth)
+			_, _ = pr.AuthManager.Update(ctx, auth)
 			disabled = append(disabled, id)
 		}
-		if GlobalStore != nil {
-			_ = GlobalStore.Delete(ctx, id)
+		if pr.AuthStore != nil {
+			_ = pr.AuthStore.Delete(ctx, id)
 		}
 		deleted = append(deleted, id)
 	}
@@ -912,22 +912,22 @@ func sdkMgmtRecentRequests(auth *cliproxyauth.Auth) []gin.H {
 
 // ── Auth Files ──
 
-func SDKMgmtAuthFilesListHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAuthFilesListHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
-	items := sdkMgmtFilteredAuthFiles(c)
+	items := pr.sdkMgmtFilteredAuthFiles(c)
 	Success(c, gin.H{"files": items, "total": len(items)})
 }
 
-func SDKMgmtAuthFilesCreateHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAuthFilesCreateHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
 	form, err := c.MultipartForm()
@@ -948,7 +948,7 @@ func SDKMgmtAuthFilesCreateHandler(c *gin.Context) {
 			Error(c, http.StatusBadRequest, 4001, err.Error())
 			return
 		}
-		registered, err := authManager.Register(c.Request.Context(), auth)
+		registered, err := pr.AuthManager.Register(c.Request.Context(), auth)
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5003, "failed to register auth file")
 			return
@@ -958,11 +958,11 @@ func SDKMgmtAuthFilesCreateHandler(c *gin.Context) {
 	Success(c, gin.H{"message": "created", "created": created, "count": len(created)})
 }
 
-func SDKMgmtAuthFilesUpdateHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAuthFilesUpdateHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
 	var payload map[string]any
@@ -981,39 +981,39 @@ func SDKMgmtAuthFilesUpdateHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, 4001, "names are required")
 		return
 	}
-	updated, missing := sdkMgmtToggleAuthFiles(c.Request.Context(), names, disabled)
+	updated, missing := pr.sdkMgmtToggleAuthFiles(c.Request.Context(), names, disabled)
 	Success(c, gin.H{"message": "updated", "updated": updated, "missing": missing})
 }
 
-func SDKMgmtAuthFilesDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAuthFilesDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
-	ids := sdkMgmtDeleteAuthFileTargets(c)
+	ids := pr.sdkMgmtDeleteAuthFileTargets(c)
 	if len(ids) == 0 {
 		Error(c, http.StatusBadRequest, 4001, "id, name, or auth_id is required")
 		return
 	}
-	deleted, disabled, missing := sdkMgmtDeleteAuthFiles(c.Request.Context(), ids)
+	deleted, disabled, missing := pr.sdkMgmtDeleteAuthFiles(c.Request.Context(), ids)
 	Success(c, gin.H{"message": "deleted", "deleted": deleted, "disabled": disabled, "missing": missing})
 }
 
-func SDKMgmtAuthFilesQuotaHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAuthFilesQuotaHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
 	items := make([]gin.H, 0)
-	for index, auth := range sdkMgmtSortedAuths() {
+	for index, auth := range pr.sdkMgmtSortedAuths() {
 		if auth == nil || sdkMgmtAuthDeleted(auth) {
 			continue
 		}
-		if !sdkMgmtAuthFileMatchesQuery(c, auth, index) {
+		if !pr.sdkMgmtAuthFileMatchesQuery(c, auth, index) {
 			continue
 		}
 		items = append(items, sdkMgmtSerializeAuthQuota(auth, index))
@@ -1021,19 +1021,19 @@ func SDKMgmtAuthFilesQuotaHandler(c *gin.Context) {
 	Success(c, gin.H{"quota": items, "items": items, "total": len(items)})
 }
 
-func SDKMgmtAuthFilesModelsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAuthFilesModelsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
 	items := make([]gin.H, 0)
-	for index, auth := range sdkMgmtSortedAuths() {
+	for index, auth := range pr.sdkMgmtSortedAuths() {
 		if auth == nil || sdkMgmtAuthDeleted(auth) {
 			continue
 		}
-		if !sdkMgmtAuthFileMatchesQuery(c, auth, index) {
+		if !pr.sdkMgmtAuthFileMatchesQuery(c, auth, index) {
 			continue
 		}
 		items = append(items, sdkMgmtSerializeAuthModels(auth, index)...)
@@ -1041,13 +1041,13 @@ func SDKMgmtAuthFilesModelsHandler(c *gin.Context) {
 	Success(c, gin.H{"models": items, "total": len(items)})
 }
 
-func sdkMgmtFilteredAuthFiles(c *gin.Context) []gin.H {
+func (pr *PanelRouter) sdkMgmtFilteredAuthFiles(c *gin.Context) []gin.H {
 	items := make([]gin.H, 0)
-	for index, auth := range sdkMgmtSortedAuths() {
+	for index, auth := range pr.sdkMgmtSortedAuths() {
 		if auth == nil || sdkMgmtAuthDeleted(auth) {
 			continue
 		}
-		if !sdkMgmtAuthFileMatchesQuery(c, auth, index) {
+		if !pr.sdkMgmtAuthFileMatchesQuery(c, auth, index) {
 			continue
 		}
 		items = append(items, sdkMgmtSerializeAuthFile(auth, index))
@@ -1055,11 +1055,11 @@ func sdkMgmtFilteredAuthFiles(c *gin.Context) []gin.H {
 	return items
 }
 
-func sdkMgmtSortedAuths() []*cliproxyauth.Auth {
-	if authManager == nil {
+func (pr *PanelRouter) sdkMgmtSortedAuths() []*cliproxyauth.Auth {
+	if pr.AuthManager == nil {
 		return nil
 	}
-	auths := authManager.List()
+	auths := pr.AuthManager.List()
 	sort.SliceStable(auths, func(i, j int) bool {
 		if auths[i] == nil || auths[j] == nil {
 			return auths[j] != nil
@@ -1072,7 +1072,7 @@ func sdkMgmtSortedAuths() []*cliproxyauth.Auth {
 	return auths
 }
 
-func sdkMgmtAuthFileMatchesQuery(c *gin.Context, auth *cliproxyauth.Auth, index int) bool {
+func (pr *PanelRouter) sdkMgmtAuthFileMatchesQuery(c *gin.Context, auth *cliproxyauth.Auth, index int) bool {
 	provider := strings.TrimSpace(c.Query("provider"))
 	if provider != "" && !strings.EqualFold(auth.Provider, provider) {
 		return false
@@ -1341,7 +1341,7 @@ func sdkMgmtPayloadStringSlice(item map[string]any, keys ...string) []string {
 	return out
 }
 
-func sdkMgmtDeleteAuthFileTargets(c *gin.Context) []string {
+func (pr *PanelRouter) sdkMgmtDeleteAuthFileTargets(c *gin.Context) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(value string) {
@@ -1366,11 +1366,11 @@ func sdkMgmtDeleteAuthFileTargets(c *gin.Context) []string {
 	return out
 }
 
-func sdkMgmtToggleAuthFiles(ctx context.Context, names []string, disabled bool) ([]string, []string) {
+func (pr *PanelRouter) sdkMgmtToggleAuthFiles(ctx context.Context, names []string, disabled bool) ([]string, []string) {
 	updated := make([]string, 0, len(names))
 	missing := make([]string, 0)
 	for _, name := range names {
-		auth, ok := sdkMgmtFindAuthFile(name)
+		auth, ok := pr.sdkMgmtFindAuthFile(name)
 		if !ok {
 			missing = append(missing, name)
 			continue
@@ -1382,25 +1382,25 @@ func sdkMgmtToggleAuthFiles(ctx context.Context, names []string, disabled bool) 
 			auth.Status = cliproxyauth.StatusActive
 		}
 		auth.UpdatedAt = time.Now().UTC()
-		if saved, err := authManager.Update(ctx, auth); err == nil && saved != nil {
+		if saved, err := pr.AuthManager.Update(ctx, auth); err == nil && saved != nil {
 			updated = append(updated, sdkMgmtAuthStableName(saved, len(updated)))
 		}
 	}
 	return updated, missing
 }
 
-func sdkMgmtDeleteAuthFiles(ctx context.Context, names []string) ([]string, []string, []string) {
+func (pr *PanelRouter) sdkMgmtDeleteAuthFiles(ctx context.Context, names []string) ([]string, []string, []string) {
 	deleted := make([]string, 0, len(names))
 	disabled := make([]string, 0, len(names))
 	missing := make([]string, 0)
 	for _, name := range names {
-		auth, ok := sdkMgmtFindAuthFile(name)
+		auth, ok := pr.sdkMgmtFindAuthFile(name)
 		if !ok {
 			missing = append(missing, name)
 			continue
 		}
-		if GlobalStore != nil {
-			_ = GlobalStore.Delete(ctx, auth.ID)
+		if pr.AuthStore != nil {
+			_ = pr.AuthStore.Delete(ctx, auth.ID)
 		}
 		if auth.Attributes == nil {
 			auth.Attributes = map[string]string{}
@@ -1414,22 +1414,22 @@ func sdkMgmtDeleteAuthFiles(ctx context.Context, names []string) ([]string, []st
 		auth.Metadata["deleted"] = true
 		auth.Metadata["deleted_at"] = time.Now().UTC().Format(time.RFC3339)
 		auth.UpdatedAt = time.Now().UTC()
-		_, _ = authManager.Update(ctx, auth)
+		_, _ = pr.AuthManager.Update(ctx, auth)
 		deleted = append(deleted, auth.ID)
 		disabled = append(disabled, sdkMgmtAuthStableName(auth, len(disabled)))
 	}
 	return deleted, disabled, missing
 }
 
-func sdkMgmtFindAuthFile(target string) (*cliproxyauth.Auth, bool) {
+func (pr *PanelRouter) sdkMgmtFindAuthFile(target string) (*cliproxyauth.Auth, bool) {
 	target = strings.TrimSpace(target)
-	if target == "" || authManager == nil {
+	if target == "" || pr.AuthManager == nil {
 		return nil, false
 	}
-	if auth, ok := authManager.GetByID(target); ok && !sdkMgmtAuthDeleted(auth) {
+	if auth, ok := pr.AuthManager.GetByID(target); ok && !sdkMgmtAuthDeleted(auth) {
 		return auth, true
 	}
-	for index, auth := range sdkMgmtSortedAuths() {
+	for index, auth := range pr.sdkMgmtSortedAuths() {
 		if auth == nil || sdkMgmtAuthDeleted(auth) {
 			continue
 		}
@@ -1530,17 +1530,17 @@ func sdkMgmtAuthModels(auth *cliproxyauth.Auth) []string {
 
 // ── OAuth ──
 
-func SDKMgmtOAuthSessionsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtOAuthSessionsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtOAuthDBReady(c) {
+	if !pr.sdkMgmtOAuthDBReady(c) {
 		return
 	}
-	sdkMgmtCleanupExpiredOAuthSessions(c.Request.Context())
+	pr.sdkMgmtCleanupExpiredOAuthSessions(c.Request.Context())
 
 	var sessions []model.OAuthSession
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("expires_at > ? OR status IN ?", time.Now().UTC(), []string{"completed", "failed"}).Order("created_at DESC").Find(&sessions).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("expires_at > ? OR status IN ?", time.Now().UTC(), []string{"completed", "failed"}).Order("created_at DESC").Find(&sessions).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5003, "failed to list OAuth sessions")
 		return
 	}
@@ -1552,11 +1552,11 @@ func SDKMgmtOAuthSessionsHandler(c *gin.Context) {
 	Success(c, gin.H{"sessions": items})
 }
 
-func SDKMgmtOAuthCallbackHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtOAuthCallbackHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtOAuthDBReady(c) || !sdkMgmtEnsureManager(c) {
+	if !pr.sdkMgmtOAuthDBReady(c) || !pr.sdkMgmtEnsureManager(c) {
 		return
 	}
 
@@ -1571,33 +1571,33 @@ func SDKMgmtOAuthCallbackHandler(c *gin.Context) {
 		return
 	}
 
-	session, cfg, ok := sdkMgmtLoadPendingOAuthSession(c, provider, state)
+	session, cfg, ok := pr.sdkMgmtLoadPendingOAuthSession(c, provider, state)
 	if !ok {
 		return
 	}
 	token, email, accountID, err := sdkMgmtExchangeOAuthToken(c.Request.Context(), provider, code, cfg)
 	if err != nil {
-		sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
+		pr.sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
 		Error(c, http.StatusBadGateway, 5021, "OAuth token exchange failed")
 		return
 	}
 
 	auth := sdkMgmtOAuthAuthRecord(provider, token, email, accountID)
-	registered, err := authManager.Register(c.Request.Context(), auth)
+	registered, err := pr.AuthManager.Register(c.Request.Context(), auth)
 	if err != nil {
-		sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
+		pr.sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
 		Error(c, http.StatusInternalServerError, 5001, "failed to register OAuth auth")
 		return
 	}
-	sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "completed", &registered.ID)
+	pr.sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "completed", &registered.ID)
 	Success(c, gin.H{"message": "OAuth completed", "provider": provider, "auth_id": registered.ID})
 }
 
-func SDKMgmtOAuthStatusHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtOAuthStatusHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	if !sdkMgmtOAuthDBReady(c) {
+	if !pr.sdkMgmtOAuthDBReady(c) {
 		return
 	}
 	state := strings.TrimSpace(c.Query("state"))
@@ -1607,7 +1607,7 @@ func SDKMgmtOAuthStatusHandler(c *gin.Context) {
 	}
 
 	var session model.OAuthSession
-	err := GlobalDB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
+	err := pr.DB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			Success(c, gin.H{"status": "missing"})
@@ -1617,7 +1617,7 @@ func SDKMgmtOAuthStatusHandler(c *gin.Context) {
 		return
 	}
 	if session.Status == "pending" && time.Now().UTC().After(session.ExpiresAt) {
-		sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
+		pr.sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
 		Success(c, gin.H{"status": "error", "message": "OAuth session expired"})
 		return
 	}
@@ -1631,8 +1631,8 @@ func SDKMgmtOAuthStatusHandler(c *gin.Context) {
 	}
 }
 
-func sdkMgmtOAuthDBReady(c *gin.Context) bool {
-	if GlobalDB == nil {
+func (pr *PanelRouter) sdkMgmtOAuthDBReady(c *gin.Context) bool {
+	if pr.DB == nil {
 		Error(c, http.StatusServiceUnavailable, 5032, "database is not initialized")
 		return false
 	}
@@ -1762,9 +1762,9 @@ func sdkMgmtOAuthCallbackParams(c *gin.Context) (string, string) {
 	return code, state
 }
 
-func sdkMgmtLoadPendingOAuthSession(c *gin.Context, provider string, state string) (model.OAuthSession, sdkMgmtOAuthSessionConfig, bool) {
+func (pr *PanelRouter) sdkMgmtLoadPendingOAuthSession(c *gin.Context, provider string, state string) (model.OAuthSession, sdkMgmtOAuthSessionConfig, bool) {
 	var session model.OAuthSession
-	err := GlobalDB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
+	err := pr.DB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			Error(c, http.StatusBadRequest, 4002, "OAuth session not found")
@@ -1786,7 +1786,7 @@ func sdkMgmtLoadPendingOAuthSession(c *gin.Context, provider string, state strin
 		return session, cfg, false
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
-		sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
+		pr.sdkMgmtMarkOAuthSession(c.Request.Context(), &session, "failed", nil)
 		Error(c, http.StatusBadRequest, 4002, "OAuth session expired")
 		return session, cfg, false
 	}
@@ -1988,22 +1988,22 @@ func sdkMgmtGeminiTokenMetadata(token sdkMgmtOAuthTokenResponse) map[string]any 
 	return values
 }
 
-func sdkMgmtMarkOAuthSession(ctx context.Context, session *model.OAuthSession, status string, authID *string) {
-	if GlobalDB == nil || session == nil || session.ID == 0 {
+func (pr *PanelRouter) sdkMgmtMarkOAuthSession(ctx context.Context, session *model.OAuthSession, status string, authID *string) {
+	if pr.DB == nil || session == nil || session.ID == 0 {
 		return
 	}
 	updates := map[string]any{"status": status}
 	if authID != nil {
 		updates["auth_id"] = *authID
 	}
-	_ = GlobalDB.WithContext(ctx).Model(session).Updates(updates).Error
+	_ = pr.DB.WithContext(ctx).Model(session).Updates(updates).Error
 }
 
-func sdkMgmtCleanupExpiredOAuthSessions(ctx context.Context) {
-	if GlobalDB == nil {
+func (pr *PanelRouter) sdkMgmtCleanupExpiredOAuthSessions(ctx context.Context) {
+	if pr.DB == nil {
 		return
 	}
-	_ = GlobalDB.WithContext(ctx).Model(&model.OAuthSession{}).Where("status = ? AND expires_at <= ?", "pending", time.Now().UTC()).Update("status", "failed").Error
+	_ = pr.DB.WithContext(ctx).Model(&model.OAuthSession{}).Where("status = ? AND expires_at <= ?", "pending", time.Now().UTC()).Update("status", "failed").Error
 }
 
 func sdkMgmtSerializeOAuthSession(session model.OAuthSession) gin.H {
@@ -2054,11 +2054,11 @@ func sdkMgmtClaimsFromJWT(token string) (string, string) {
 	return email, accountID
 }
 
-func sdkMgmtOAuthAuthURLHandler(c *gin.Context, endpoint string) {
-	if !sdkMgmtAuthURLProviderSupported(c, endpoint) {
+func (pr *PanelRouter) sdkMgmtOAuthAuthURLHandler(c *gin.Context, endpoint string) {
+	if !pr.sdkMgmtAuthURLProviderSupported(c, endpoint) {
 		return
 	}
-	if !sdkMgmtOAuthDBReady(c) {
+	if !pr.sdkMgmtOAuthDBReady(c) {
 		return
 	}
 	provider := sdkMgmtAuthURLProviders[endpoint]
@@ -2087,7 +2087,7 @@ func sdkMgmtOAuthAuthURLHandler(c *gin.Context, endpoint string) {
 		return
 	}
 	session := model.OAuthSession{Provider: provider, State: state, AuthURL: authURL, Status: "pending", ConfigData: encoded, ExpiresAt: time.Now().UTC().Add(sdkMgmtOAuthSessionTTL)}
-	if err := GlobalDB.WithContext(c.Request.Context()).Create(&session).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Create(&session).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5004, "failed to store OAuth session")
 		return
 	}
@@ -2096,11 +2096,11 @@ func sdkMgmtOAuthAuthURLHandler(c *gin.Context, endpoint string) {
 
 // ── Ampcode ──
 
-func SDKMgmtAmpcodeGetHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeGetHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
@@ -2108,8 +2108,8 @@ func SDKMgmtAmpcodeGetHandler(c *gin.Context) {
 	Success(c, normalizeAmpcodeResponse(m))
 }
 
-func SDKMgmtAmpcodePutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodePutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var body map[string]any
@@ -2125,13 +2125,13 @@ func SDKMgmtAmpcodePutHandler(c *gin.Context) {
 		return
 	}
 	normalizeAmpcodeInputKeys(payload)
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	maps.Copy(m, payload)
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
@@ -2140,11 +2140,11 @@ func SDKMgmtAmpcodePutHandler(c *gin.Context) {
 
 // ── /ampcode/model-mappings ──
 
-func SDKMgmtAmpcodeModelMappingsGetHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeModelMappingsGetHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
@@ -2161,8 +2161,8 @@ func SDKMgmtAmpcodeModelMappingsGetHandler(c *gin.Context) {
 	Success(c, gin.H{"model-mappings": mappings, "mappings": mappings})
 }
 
-func SDKMgmtAmpcodeModelMappingsPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeModelMappingsPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	raw, err := c.GetRawData()
@@ -2183,30 +2183,30 @@ func SDKMgmtAmpcodeModelMappingsPutHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, 4000, "invalid model-mappings: expected array or {value:array}")
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	m["model-mappings"] = mappings
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
 	Success(c, gin.H{"model-mappings": mappings, "mappings": mappings})
 }
 
-func SDKMgmtAmpcodeModelMappingsDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeModelMappingsDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	delete(m, "model-mappings")
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
@@ -2215,11 +2215,11 @@ func SDKMgmtAmpcodeModelMappingsDeleteHandler(c *gin.Context) {
 
 // ── /ampcode/upstream-api-keys ──
 
-func SDKMgmtAmpcodeUpstreamAPIKeysGetHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamAPIKeysGetHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
@@ -2236,8 +2236,8 @@ func SDKMgmtAmpcodeUpstreamAPIKeysGetHandler(c *gin.Context) {
 	Success(c, gin.H{"upstream-api-keys": keys})
 }
 
-func SDKMgmtAmpcodeUpstreamAPIKeysPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamAPIKeysPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	raw, err := c.GetRawData()
@@ -2258,21 +2258,21 @@ func SDKMgmtAmpcodeUpstreamAPIKeysPutHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, 4000, "invalid upstream-api-keys: expected array or {value:array}")
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	m["upstream-api-keys"] = entries
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
 	Success(c, gin.H{"upstream-api-keys": entries})
 }
 
-func SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var body struct {
@@ -2286,7 +2286,7 @@ func SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler(c *gin.Context) {
 	for _, k := range body.Value {
 		remove[k] = true
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
@@ -2303,7 +2303,7 @@ func SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler(c *gin.Context) {
 		filtered = append(filtered, entry)
 	}
 	m["upstream-api-keys"] = filtered
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
@@ -2312,8 +2312,8 @@ func SDKMgmtAmpcodeUpstreamAPIKeysDeleteHandler(c *gin.Context) {
 
 // ── /ampcode/upstream-url ──
 
-func SDKMgmtAmpcodeUpstreamURLPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamURLPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var body struct {
@@ -2323,30 +2323,30 @@ func SDKMgmtAmpcodeUpstreamURLPutHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, 4000, "invalid request body")
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	m["upstream-url"] = body.Value
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
 	Success(c, normalizeAmpcodeResponse(m))
 }
 
-func SDKMgmtAmpcodeUpstreamURLDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamURLDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	delete(m, "upstream-url")
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
@@ -2355,8 +2355,8 @@ func SDKMgmtAmpcodeUpstreamURLDeleteHandler(c *gin.Context) {
 
 // ── /ampcode/upstream-api-key (singular) ──
 
-func SDKMgmtAmpcodeUpstreamAPIKeyPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamAPIKeyPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var body struct {
@@ -2366,30 +2366,30 @@ func SDKMgmtAmpcodeUpstreamAPIKeyPutHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, 4000, "invalid request body")
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	m["upstream-api-key"] = body.Value
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
 	Success(c, normalizeAmpcodeResponse(m))
 }
 
-func SDKMgmtAmpcodeUpstreamAPIKeyDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtAmpcodeUpstreamAPIKeyDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	m, err := loadAmpcodeConfig(c.Request.Context())
+	m, err := pr.loadAmpcodeConfig(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to load ampcode config")
 		return
 	}
 	delete(m, "upstream-api-key")
-	if err := saveAmpcodeConfig(c.Request.Context(), m); err != nil {
+	if err := pr.saveAmpcodeConfig(c.Request.Context(), m); err != nil {
 		Error(c, http.StatusInternalServerError, 5000, "failed to save ampcode config")
 		return
 	}
@@ -2400,9 +2400,9 @@ func SDKMgmtAmpcodeUpstreamAPIKeyDeleteHandler(c *gin.Context) {
 
 // ── SDK Config Persistence ──
 
-func sdkMgmtReadConfig() (map[string]any, error) {
+func (pr *PanelRouter) sdkMgmtReadConfig() (map[string]any, error) {
 	var pc model.ProviderConfig
-	err := GlobalDB.Where("provider = ?", "sdk_config").First(&pc).Error
+	err := pr.DB.Where("provider = ?", "sdk_config").First(&pc).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return make(map[string]any), nil
@@ -2416,23 +2416,23 @@ func sdkMgmtReadConfig() (map[string]any, error) {
 	return data, nil
 }
 
-func sdkMgmtWriteConfig(data map[string]any) error {
+func (pr *PanelRouter) sdkMgmtWriteConfig(data map[string]any) error {
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	return GlobalDB.Where("provider = ?", "sdk_config").
+	return pr.DB.Where("provider = ?", "sdk_config").
 		Assign(model.ProviderConfig{ConfigData: raw}).
 		FirstOrCreate(&model.ProviderConfig{Provider: "sdk_config", ConfigData: raw}).Error
 }
 
 // ── Config Handlers ──
 
-func SDKMgmtConfigGetHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtConfigGetHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
-	config, err := sdkMgmtReadConfig()
+	config, err := pr.sdkMgmtReadConfig()
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 		return
@@ -2440,8 +2440,8 @@ func SDKMgmtConfigGetHandler(c *gin.Context) {
 	Success(c, sdkMgmtExpandConfigAliases(config))
 }
 
-func SDKMgmtConfigPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtConfigPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var incoming map[string]any
@@ -2450,13 +2450,13 @@ func SDKMgmtConfigPutHandler(c *gin.Context) {
 		return
 	}
 	normalized := sdkMgmtNormalizeConfigMap(incoming)
-	config, err := sdkMgmtReadConfig()
+	config, err := pr.sdkMgmtReadConfig()
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 		return
 	}
 	maps.Copy(config, normalized)
-	if err := sdkMgmtWriteConfig(config); err != nil {
+	if err := pr.sdkMgmtWriteConfig(config); err != nil {
 		Error(c, http.StatusInternalServerError, 5005, "failed to save SDK config")
 		return
 	}
@@ -2465,12 +2465,12 @@ func SDKMgmtConfigPutHandler(c *gin.Context) {
 
 // ── Convenience Config Key Handlers ──
 
-func sdkMgmtConfigGetHandlerFn(key string, aliases ...string) gin.HandlerFunc {
+func (pr *PanelRouter) sdkMgmtConfigGetHandlerFn(key string, aliases ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireAdmin(c) {
+		if !pr.requireAdmin(c) {
 			return
 		}
-		config, err := sdkMgmtReadConfig()
+		config, err := pr.sdkMgmtReadConfig()
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 			return
@@ -2484,9 +2484,9 @@ func sdkMgmtConfigGetHandlerFn(key string, aliases ...string) gin.HandlerFunc {
 	}
 }
 
-func sdkMgmtConfigSetHandlerFn(key string) gin.HandlerFunc {
+func (pr *PanelRouter) sdkMgmtConfigSetHandlerFn(key string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireAdmin(c) {
+		if !pr.requireAdmin(c) {
 			return
 		}
 		var body struct {
@@ -2496,13 +2496,13 @@ func sdkMgmtConfigSetHandlerFn(key string) gin.HandlerFunc {
 			Error(c, http.StatusBadRequest, 4000, `invalid JSON body: {"value": ...} expected`)
 			return
 		}
-		config, err := sdkMgmtReadConfig()
+		config, err := pr.sdkMgmtReadConfig()
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 			return
 		}
 		config[key] = body.Value
-		if err := sdkMgmtWriteConfig(config); err != nil {
+		if err := pr.sdkMgmtWriteConfig(config); err != nil {
 			Error(c, http.StatusInternalServerError, 5005, "failed to save SDK config")
 			return
 		}
@@ -2510,18 +2510,18 @@ func sdkMgmtConfigSetHandlerFn(key string) gin.HandlerFunc {
 	}
 }
 
-func sdkMgmtConfigDeleteHandlerFn(key string) gin.HandlerFunc {
+func (pr *PanelRouter) sdkMgmtConfigDeleteHandlerFn(key string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireAdmin(c) {
+		if !pr.requireAdmin(c) {
 			return
 		}
-		config, err := sdkMgmtReadConfig()
+		config, err := pr.sdkMgmtReadConfig()
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 			return
 		}
 		delete(config, key)
-		if err := sdkMgmtWriteConfig(config); err != nil {
+		if err := pr.sdkMgmtWriteConfig(config); err != nil {
 			Error(c, http.StatusInternalServerError, 5005, "failed to save SDK config")
 			return
 		}
@@ -2529,12 +2529,12 @@ func sdkMgmtConfigDeleteHandlerFn(key string) gin.HandlerFunc {
 	}
 }
 
-func sdkMgmtConfigGetRoutingStrategyFn() gin.HandlerFunc {
+func (pr *PanelRouter) sdkMgmtConfigGetRoutingStrategyFn() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireAdmin(c) {
+		if !pr.requireAdmin(c) {
 			return
 		}
-		config, err := sdkMgmtReadConfig()
+		config, err := pr.sdkMgmtReadConfig()
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 			return
@@ -2551,12 +2551,12 @@ func sdkMgmtConfigGetRoutingStrategyFn() gin.HandlerFunc {
 	}
 }
 
-func sdkMgmtConfigGetForceModelPrefixFn() gin.HandlerFunc {
+func (pr *PanelRouter) sdkMgmtConfigGetForceModelPrefixFn() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireAdmin(c) {
+		if !pr.requireAdmin(c) {
 			return
 		}
-		config, err := sdkMgmtReadConfig()
+		config, err := pr.sdkMgmtReadConfig()
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 			return
@@ -2569,12 +2569,12 @@ func sdkMgmtConfigGetForceModelPrefixFn() gin.HandlerFunc {
 	}
 }
 
-func sdkMgmtConfigGetLogsMaxSizeFn() gin.HandlerFunc {
+func (pr *PanelRouter) sdkMgmtConfigGetLogsMaxSizeFn() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !requireAdmin(c) {
+		if !pr.requireAdmin(c) {
 			return
 		}
-		config, err := sdkMgmtReadConfig()
+		config, err := pr.sdkMgmtReadConfig()
 		if err != nil {
 			Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 			return
@@ -2675,8 +2675,8 @@ func sdkMgmtExpandConfigAliases(config map[string]any) map[string]any {
 	return result
 }
 
-func SDKMgmtSDKConfigPatchHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtSDKConfigPatchHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var incoming map[string]any
@@ -2685,13 +2685,13 @@ func SDKMgmtSDKConfigPatchHandler(c *gin.Context) {
 		return
 	}
 	normalized := sdkMgmtNormalizeConfigMap(incoming)
-	config, err := sdkMgmtReadConfig()
+	config, err := pr.sdkMgmtReadConfig()
 	if err != nil {
 		Error(c, http.StatusInternalServerError, 5004, "failed to read SDK config")
 		return
 	}
 	maps.Copy(config, normalized)
-	if err := sdkMgmtWriteConfig(config); err != nil {
+	if err := pr.sdkMgmtWriteConfig(config); err != nil {
 		Error(c, http.StatusInternalServerError, 5005, "failed to save SDK config")
 		return
 	}
@@ -2700,8 +2700,8 @@ func SDKMgmtSDKConfigPatchHandler(c *gin.Context) {
 
 // ── Logs ──
 
-func SDKMgmtLogsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtLogsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	limit := 50
@@ -2710,7 +2710,7 @@ func SDKMgmtLogsHandler(c *gin.Context) {
 	}
 	level := c.Query("level")
 
-	q := GlobalDB.Model(&model.UsageLog{}).Order("created_at DESC").Limit(limit)
+	q := pr.DB.Model(&model.UsageLog{}).Order("created_at DESC").Limit(limit)
 	switch level {
 	case "error":
 		q = q.Where("failed = ?", true)
@@ -2748,15 +2748,15 @@ func SDKMgmtLogsHandler(c *gin.Context) {
 	Success(c, gin.H{"logs": items})
 }
 
-func SDKMgmtLogsDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtLogsDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	Success(c, gin.H{"message": "logs clear not supported on UsageLog-backed endpoint"})
 }
 
-func SDKMgmtRequestErrorLogsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtRequestErrorLogsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	limit := 50
@@ -2765,7 +2765,7 @@ func SDKMgmtRequestErrorLogsHandler(c *gin.Context) {
 	}
 
 	var logs []model.UsageLog
-	if err := GlobalDB.Model(&model.UsageLog{}).Where("failed = ?", true).
+	if err := pr.DB.Model(&model.UsageLog{}).Where("failed = ?", true).
 		Order("created_at DESC").Limit(limit).Find(&logs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, 5006, "failed to query error logs")
 		return
@@ -2791,8 +2791,8 @@ func SDKMgmtRequestErrorLogsHandler(c *gin.Context) {
 	Success(c, gin.H{"logs": items})
 }
 
-func SDKMgmtRequestErrorLogsDeleteHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtRequestErrorLogsDeleteHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	Success(c, gin.H{"message": "error logs clear not supported on UsageLog-backed endpoint"})
@@ -2800,15 +2800,15 @@ func SDKMgmtRequestErrorLogsDeleteHandler(c *gin.Context) {
 
 // ── Model Definitions ──
 
-func SDKMgmtModelDefinitionsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) SDKMgmtModelDefinitionsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	channel := c.Param("channel")
 
 	// Attempt to read catalog entries from model_catalog_entries table
 	var catalog []model.ModelCatalogEntry
-	GlobalDB.Where("channel_key = ?", channel).Find(&catalog)
+	pr.DB.Where("channel_key = ?", channel).Find(&catalog)
 
 	var models []gin.H
 	if len(catalog) > 0 {

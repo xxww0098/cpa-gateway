@@ -5,17 +5,26 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
-	"maps"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
+	"github.com/xxww0098/cpa-gateway/api"
+	"github.com/xxww0098/cpa-gateway/infra"
+	"github.com/xxww0098/cpa-gateway/ledger"
+	"github.com/xxww0098/cpa-gateway/pricing"
 )
 
 const appVersion = "0.1.0"
+
+// globalPanel is the PanelRouter instance created during startup. Root-package
+// code (handler_proxy.go's AuthMiddleware/BillingMiddleware, etc.) delegates
+// API-key validation to it so the in-memory cache stays shared across the
+// panel and the /v1/* proxy. It is populated by run() before any requests
+// are served.
+var globalPanel *api.PanelRouter
 
 func main() {
 	configPath := flag.String("config", "config.example.yaml", "path to YAML config file")
@@ -49,23 +58,38 @@ func run(configPath string) error {
 		return err
 	}
 	GlobalStore = NewPostgresAuthStore(db)
-	if err := EnsureSubscriptionSeeds(db); err != nil {
+	if err := api.EnsureSubscriptionSeeds(db); err != nil {
 		return err
 	}
 	if err := EnsureSDKManagementSeeds(db, cfg); err != nil {
 		return err
 	}
+	if err := SeedModelPrices(db); err != nil {
+		slog.Warn("failed to seed model prices; continuing startup", "error", err)
+	}
 
-	redisClient := initRedis(cfg)
-	GlobalLedger = NewLedger(db, redisClient)
-	go startCacheCleanup(context.Background())
+	redisClient := infra.InitRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	GlobalLedger = ledger.New(db, redisClient)
 
 	if err := InitSDK(cfg); err != nil {
 		return err
 	}
 
+	// Construct the PanelRouter. The pricing.Calculator is a Wave-2
+	// placeholder; a fully-wired Calculator lands in Task 8.
+	panelRouter := api.NewPanelRouter(db, redisClient, GlobalLedger, &pricing.Calculator{}, cfg)
+	panelRouter.AuthStore = GlobalStore
+	panelRouter.AuthManager = authManager
+	panelRouter.StartCacheCleanup(context.Background())
+	globalPanel = panelRouter
+
 	r := gin.Default()
-	registerRoutes(r)
+	panelRouter.RegisterPanelRoutes(r)
+
+	// Proxy routes remain in the root package until Wave 4 removes them.
+	proxy := r.Group("/v1", panelRouter.AuthMiddleware(), BillingMiddleware())
+	proxy.POST("/chat/completions", ProxyChatHandler)
+	proxy.GET("/models", ProxyModelsHandler)
 
 	addr := serverAddr(cfg)
 	srv := &http.Server{
@@ -79,89 +103,6 @@ func run(configPath string) error {
 		return err
 	}
 	return nil
-}
-
-func initRedis(cfg *Config) *redis.Client {
-	addr := cfg.Redis.Addr
-	if addr == "" {
-		slog.Warn("Redis disabled: redis.addr is empty")
-		return nil
-	}
-
-	client := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		slog.Warn("Redis unavailable; continuing without Redis-backed holds", "error", err)
-		if closeErr := client.Close(); closeErr != nil {
-			slog.Warn("failed to close unavailable Redis client", "error", closeErr)
-		}
-		return nil
-	}
-
-	slog.Info("Redis connection established", "addr", addr, "db", cfg.Redis.DB)
-	return client
-}
-
-func registerRoutes(r *gin.Engine) {
-	SetupMiddleware(r)
-
-	healthHandler := func(c *gin.Context) {
-		Success(c, gin.H{"status": "ok"})
-	}
-	r.GET("/healthz", healthHandler)
-	r.GET("/api/health", healthHandler)
-	r.GET("/metrics", MetricsHandler)
-
-	panel := r.Group("/api/panel")
-	RegisterAuthRoutes(panel)
-	authedPanel := panel.Group("/", AuthMiddleware())
-	RegisterUserRoutes(authedPanel)
-	RegisterSubscriptionRoutes(authedPanel)
-	RegisterAdminRoutes(authedPanel)
-	RegisterOpsRoutes(authedPanel)
-
-	sdkMgmt := authedPanel.Group("/admin/sdk-management")
-	RegisterSDKManagementRoutes(sdkMgmt)
-
-	authedPanel.PATCH("/admin/sdk-config", SDKMgmtSDKConfigPatchHandler)
-
-	proxy := r.Group("/v1", AuthMiddleware(), BillingMiddleware())
-	proxy.POST("/chat/completions", ProxyChatHandler)
-	proxy.GET("/models", ProxyModelsHandler)
-}
-
-func MetricsHandler(c *gin.Context) {
-	requestMetrics.mu.RLock()
-	defer requestMetrics.mu.RUnlock()
-
-	statusCounts := make(map[int]uint64, len(requestMetrics.statusCounts))
-	maps.Copy(statusCounts, requestMetrics.statusCounts)
-	pathCounts := make(map[string]uint64, len(requestMetrics.pathCounts))
-	maps.Copy(pathCounts, requestMetrics.pathCounts)
-
-	Success(c, gin.H{
-		"started_at":         requestMetrics.startedAt.UTC().Format(time.RFC3339),
-		"uptime_seconds":     int64(time.Since(requestMetrics.startedAt).Seconds()),
-		"total_requests":     requestMetrics.totalRequests,
-		"in_flight":          requestMetrics.inFlight,
-		"status_counts":      statusCounts,
-		"path_counts":        pathCounts,
-		"total_latency_ms":   requestMetrics.totalLatencySum.Milliseconds(),
-		"average_latency_ms": averageLatencyMillisLocked(),
-	})
-}
-
-func averageLatencyMillisLocked() float64 {
-	if requestMetrics.totalRequests == 0 {
-		return 0
-	}
-	return float64(requestMetrics.totalLatencySum.Milliseconds()) / float64(requestMetrics.totalRequests)
 }
 
 func serverAddr(cfg *Config) string {

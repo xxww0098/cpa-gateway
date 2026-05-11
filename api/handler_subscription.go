@@ -1,38 +1,39 @@
-package main
+package api
 
 import (
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xxww0098/cpa-gateway/ledger"
 	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
 )
 
 type subscriptionPackageItem struct {
-	ID                  uint     `json:"id"`
-	Name                string   `json:"name"`
-	Description         string   `json:"description,omitempty"`
-	RateMultiplier      float64  `json:"rate_multiplier"`
-	DefaultValidityDays int      `json:"default_validity_days"`
-	DailyLimitUSD       *float64 `json:"daily_limit_usd,omitempty"`
-	WeeklyLimitUSD      *float64 `json:"weekly_limit_usd,omitempty"`
-	MonthlyLimitUSD     *float64 `json:"monthly_limit_usd,omitempty"`
+	ID                   uint     `json:"id"`
+	Name                 string   `json:"name"`
+	Description          string   `json:"description,omitempty"`
+	RateMultiplier       float64  `json:"rate_multiplier"`
+	DefaultValidityDays  int      `json:"default_validity_days"`
+	DailyLimitUSD        *float64 `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD       *float64 `json:"weekly_limit_usd,omitempty"`
+	MonthlyLimitUSD      *float64 `json:"monthly_limit_usd,omitempty"`
 	SubscriptionPriceUSD float64  `json:"subscription_price_usd"`
 }
 
 type subscriptionItem struct {
-	ID             uint      `json:"id"`
-	GroupID        uint      `json:"group_id"`
-	GroupName      string    `json:"group_name"`
-	Status         string    `json:"status"`
-	StartsAt       time.Time `json:"starts_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	DailyUsageUSD  float64   `json:"daily_usage_usd"`
-	WeeklyUsageUSD float64   `json:"weekly_usage_usd"`
+	ID              uint      `json:"id"`
+	GroupID         uint      `json:"group_id"`
+	GroupName       string    `json:"group_name"`
+	Status          string    `json:"status"`
+	StartsAt        time.Time `json:"starts_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	DailyUsageUSD   float64   `json:"daily_usage_usd"`
+	WeeklyUsageUSD  float64   `json:"weekly_usage_usd"`
 	MonthlyUsageUSD float64   `json:"monthly_usage_usd"`
-	DailyLimitUSD  *float64  `json:"daily_limit_usd,omitempty"`
-	WeeklyLimitUSD *float64  `json:"weekly_limit_usd,omitempty"`
+	DailyLimitUSD   *float64  `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD  *float64  `json:"weekly_limit_usd,omitempty"`
 	MonthlyLimitUSD *float64  `json:"monthly_limit_usd,omitempty"`
 }
 
@@ -40,20 +41,20 @@ type purchaseSubscriptionRequest struct {
 	GroupID uint `json:"group_id"`
 }
 
-func RegisterSubscriptionRoutes(rg *gin.RouterGroup) {
-	rg.GET("/user/subscription-packages", ListSubscriptionPackagesHandler)
-	rg.GET("/user/subscriptions", ListSubscriptionsHandler)
-	rg.POST("/user/subscriptions/purchase", PurchaseSubscriptionHandler)
+func (pr *PanelRouter) RegisterSubscriptionRoutes(rg *gin.RouterGroup) {
+	rg.GET("/user/subscription-packages", pr.ListSubscriptionPackagesHandler)
+	rg.GET("/user/subscriptions", pr.ListSubscriptionsHandler)
+	rg.POST("/user/subscriptions/purchase", pr.PurchaseSubscriptionHandler)
 }
 
-func ListSubscriptionPackagesHandler(c *gin.Context) {
-	if GlobalDB == nil {
+func (pr *PanelRouter) ListSubscriptionPackagesHandler(c *gin.Context) {
+	if pr.DB == nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "database not initialized")
 		return
 	}
 
 	var pkgs []model.SubscriptionPackage
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("enabled = ?", true).Order("id ASC").Find(&pkgs).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("enabled = ?", true).Order("id ASC").Find(&pkgs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list subscription packages")
 		return
 	}
@@ -61,14 +62,14 @@ func ListSubscriptionPackagesHandler(c *gin.Context) {
 	items := make([]subscriptionPackageItem, 0, len(pkgs))
 	for _, pkg := range pkgs {
 		items = append(items, subscriptionPackageItem{
-			ID:                  pkg.GroupID,
-			Name:                pkg.Name,
-			Description:         pkg.Description,
-			RateMultiplier:      pkg.RateMultiplier,
-			DefaultValidityDays: pkg.DefaultValidityDays,
-			DailyLimitUSD:       pkg.DailyLimitUSD,
-			WeeklyLimitUSD:      pkg.WeeklyLimitUSD,
-			MonthlyLimitUSD:     pkg.MonthlyLimitUSD,
+			ID:                   pkg.GroupID,
+			Name:                 pkg.Name,
+			Description:          pkg.Description,
+			RateMultiplier:       pkg.RateMultiplier,
+			DefaultValidityDays:  pkg.DefaultValidityDays,
+			DailyLimitUSD:        pkg.DailyLimitUSD,
+			WeeklyLimitUSD:       pkg.WeeklyLimitUSD,
+			MonthlyLimitUSD:      pkg.MonthlyLimitUSD,
 			SubscriptionPriceUSD: pkg.SubscriptionPriceUSD,
 		})
 	}
@@ -76,14 +77,14 @@ func ListSubscriptionPackagesHandler(c *gin.Context) {
 	Success(c, items)
 }
 
-func ListSubscriptionsHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) ListSubscriptionsHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
 
 	var subs []model.Subscription
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("user_id = ?", bc.UserID).Order("created_at DESC").Find(&subs).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("user_id = ?", bc.UserID).Order("created_at DESC").Find(&subs).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list subscriptions")
 		return
 	}
@@ -91,17 +92,17 @@ func ListSubscriptionsHandler(c *gin.Context) {
 	items := make([]subscriptionItem, 0, len(subs))
 	for _, sub := range subs {
 		items = append(items, subscriptionItem{
-			ID:             sub.ID,
-			GroupID:        sub.GroupID,
-			GroupName:      sub.GroupName,
-			Status:         sub.Status,
-			StartsAt:       sub.StartsAt,
-			ExpiresAt:      sub.ExpiresAt,
-			DailyUsageUSD:  sub.DailyUsageUSD,
-			WeeklyUsageUSD: sub.WeeklyUsageUSD,
+			ID:              sub.ID,
+			GroupID:         sub.GroupID,
+			GroupName:       sub.GroupName,
+			Status:          sub.Status,
+			StartsAt:        sub.StartsAt,
+			ExpiresAt:       sub.ExpiresAt,
+			DailyUsageUSD:   sub.DailyUsageUSD,
+			WeeklyUsageUSD:  sub.WeeklyUsageUSD,
 			MonthlyUsageUSD: sub.MonthlyUsageUSD,
-			DailyLimitUSD:  sub.DailyLimitUSD,
-			WeeklyLimitUSD: sub.WeeklyLimitUSD,
+			DailyLimitUSD:   sub.DailyLimitUSD,
+			WeeklyLimitUSD:  sub.WeeklyLimitUSD,
 			MonthlyLimitUSD: sub.MonthlyLimitUSD,
 		})
 	}
@@ -109,8 +110,8 @@ func ListSubscriptionsHandler(c *gin.Context) {
 	Success(c, items)
 }
 
-func PurchaseSubscriptionHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) PurchaseSubscriptionHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -122,12 +123,12 @@ func PurchaseSubscriptionHandler(c *gin.Context) {
 	}
 
 	var pkg model.SubscriptionPackage
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("group_id = ? AND enabled = ?", req.GroupID, true).First(&pkg).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("group_id = ? AND enabled = ?", req.GroupID, true).First(&pkg).Error; err != nil {
 		Error(c, http.StatusNotFound, apiErrorNotFound, "subscription package not found")
 		return
 	}
 
-	if GlobalLedger == nil {
+	if pr.Ledger == nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "ledger not initialized")
 		return
 	}
@@ -137,8 +138,8 @@ func PurchaseSubscriptionHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid subscription package price")
 		return
 	}
-	if err := GlobalLedger.Debit(c.Request.Context(), bc.UserID, price, "subscription_purchase"); err != nil {
-		if err == ErrInsufficientBalance {
+	if err := pr.Ledger.Debit(c.Request.Context(), bc.UserID, price, "subscription_purchase"); err != nil {
+		if err == ledger.ErrInsufficientBalance {
 			Error(c, http.StatusBadRequest, apiErrorBadRequest, "insufficient balance")
 			return
 		}
@@ -175,12 +176,12 @@ func PurchaseSubscriptionHandler(c *gin.Context) {
 		WeeklyLimitUSD:  pkg.WeeklyLimitUSD,
 		MonthlyLimitUSD: pkg.MonthlyLimitUSD,
 	}
-	if err := GlobalDB.WithContext(c.Request.Context()).Create(&sub).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Create(&sub).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create subscription")
 		return
 	}
 
-	balance, err := GlobalLedger.GetBalance(c.Request.Context(), bc.UserID)
+	balance, err := pr.Ledger.GetBalance(c.Request.Context(), bc.UserID)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load balance")
 		return
@@ -189,6 +190,8 @@ func PurchaseSubscriptionHandler(c *gin.Context) {
 	Success(c, gin.H{"subscription_id": sub.ID, "balance": balance})
 }
 
+// EnsureSubscriptionSeeds seeds the default subscription packages if they are absent.
+// Exported for main.go so it can be invoked during startup.
 func EnsureSubscriptionSeeds(db *gorm.DB) error {
 	if db == nil {
 		return nil

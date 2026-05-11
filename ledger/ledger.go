@@ -1,4 +1,4 @@
-package main
+package ledger
 
 import (
 	"context"
@@ -19,14 +19,20 @@ const (
 	holdKeyPattern       = "cpa-gateway:billing:hold:%d:*"
 )
 
+// ErrInsufficientBalance indicates the user does not have enough available balance.
+var ErrInsufficientBalance = errors.New("insufficient balance")
+
+// ErrUserNotFound indicates the requested user does not exist.
+var ErrUserNotFound = errors.New("user not found")
+
 // Ledger coordinates persistent balance updates and Redis pre-charge holds.
 type Ledger struct {
 	db    *gorm.DB
 	redis *redis.Client
 }
 
-// NewLedger constructs a billing ledger backed by GORM and optional Redis.
-func NewLedger(db *gorm.DB, redisClient *redis.Client) *Ledger {
+// New constructs a billing ledger backed by GORM and optional Redis.
+func New(db *gorm.DB, redisClient *redis.Client) *Ledger {
 	return &Ledger{db: db, redis: redisClient}
 }
 

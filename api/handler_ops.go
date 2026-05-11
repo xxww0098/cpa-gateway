@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"errors"
@@ -125,45 +125,45 @@ var opsStore = struct {
 	orders: []paymentOrderRecord{},
 }
 
-func RegisterOpsRoutes(rg *gin.RouterGroup) {
-	rg.GET("/user/notifications/unread-count", UserUnreadNotificationsHandler)
-	rg.GET("/user/notifications", UserNotificationsHandler)
-	rg.PUT("/user/notifications/:id/read", UserReadNotificationHandler)
-	rg.PUT("/user/notifications/read-all", UserReadAllNotificationsHandler)
-	rg.POST("/user/redeem", UserRedeemHandler)
-	rg.GET("/refund/list", UserRefundListHandler)
-	rg.POST("/refund/apply", UserRefundApplyHandler)
+func (pr *PanelRouter) RegisterOpsRoutes(rg *gin.RouterGroup) {
+	rg.GET("/user/notifications/unread-count", pr.UserUnreadNotificationsHandler)
+	rg.GET("/user/notifications", pr.UserNotificationsHandler)
+	rg.PUT("/user/notifications/:id/read", pr.UserReadNotificationHandler)
+	rg.PUT("/user/notifications/read-all", pr.UserReadAllNotificationsHandler)
+	rg.POST("/user/redeem", pr.UserRedeemHandler)
+	rg.GET("/refund/list", pr.UserRefundListHandler)
+	rg.POST("/refund/apply", pr.UserRefundApplyHandler)
 
-	rg.GET("/admin/announcements", AdminListAnnouncementsHandler)
-	rg.POST("/admin/announcements", AdminCreateAnnouncementHandler)
-	rg.PUT("/admin/announcements/:id", AdminUpdateAnnouncementHandler)
-	rg.DELETE("/admin/announcements/:id", AdminDeleteAnnouncementHandler)
-	rg.GET("/admin/orders", AdminListOrdersHandler)
-	rg.GET("/admin/usage-logs", AdminUsageLogsHandler)
-	rg.GET("/admin/redeem-codes", AdminListRedeemCodesHandler)
-	rg.POST("/admin/redeem-codes", AdminCreateRedeemCodesHandler)
-	rg.DELETE("/admin/redeem-codes/:id", AdminDeleteRedeemCodeHandler)
-	rg.GET("/admin/pricing/groups", AdminListPricingGroupsHandler)
-	rg.POST("/admin/pricing/groups", AdminUpsertPricingGroupHandler)
-	rg.DELETE("/admin/pricing/groups/:name", AdminDeletePricingGroupHandler)
-	rg.GET("/admin/model-catalog/models-url", AdminModelCatalogModelsURLGetHandler)
-	rg.PUT("/admin/model-catalog/models-url", AdminModelCatalogModelsURLPutHandler)
-	rg.POST("/admin/model-catalog/ensure-openai-channel", AdminModelCatalogEnsureOpenAIChannelHandler)
-	rg.POST("/admin/model-catalog/openai-visibility", AdminModelCatalogOpenAIVisibilityHandler)
-	rg.POST("/admin/pricing/models", AdminUpsertPricingModelHandler)
-	rg.GET("/admin/refunds", AdminListRefundsHandler)
-	rg.PUT("/admin/refund/:id/approve", AdminApproveRefundHandler)
-	rg.PUT("/admin/refund/:id/reject", AdminRejectRefundHandler)
+	rg.GET("/admin/announcements", pr.AdminListAnnouncementsHandler)
+	rg.POST("/admin/announcements", pr.AdminCreateAnnouncementHandler)
+	rg.PUT("/admin/announcements/:id", pr.AdminUpdateAnnouncementHandler)
+	rg.DELETE("/admin/announcements/:id", pr.AdminDeleteAnnouncementHandler)
+	rg.GET("/admin/orders", pr.AdminListOrdersHandler)
+	rg.GET("/admin/usage-logs", pr.AdminUsageLogsHandler)
+	rg.GET("/admin/redeem-codes", pr.AdminListRedeemCodesHandler)
+	rg.POST("/admin/redeem-codes", pr.AdminCreateRedeemCodesHandler)
+	rg.DELETE("/admin/redeem-codes/:id", pr.AdminDeleteRedeemCodeHandler)
+	rg.GET("/admin/pricing/groups", pr.AdminListPricingGroupsHandler)
+	rg.POST("/admin/pricing/groups", pr.AdminUpsertPricingGroupHandler)
+	rg.DELETE("/admin/pricing/groups/:name", pr.AdminDeletePricingGroupHandler)
+	rg.GET("/admin/model-catalog/models-url", pr.AdminModelCatalogModelsURLGetHandler)
+	rg.PUT("/admin/model-catalog/models-url", pr.AdminModelCatalogModelsURLPutHandler)
+	rg.POST("/admin/model-catalog/ensure-openai-channel", pr.AdminModelCatalogEnsureOpenAIChannelHandler)
+	rg.POST("/admin/model-catalog/openai-visibility", pr.AdminModelCatalogOpenAIVisibilityHandler)
+	rg.POST("/admin/pricing/models", pr.AdminUpsertPricingModelHandler)
+	rg.GET("/admin/refunds", pr.AdminListRefundsHandler)
+	rg.PUT("/admin/refund/:id/approve", pr.AdminApproveRefundHandler)
+	rg.PUT("/admin/refund/:id/reject", pr.AdminRejectRefundHandler)
 
-	rg.GET("/payment/stripe/config", PaymentStripeConfigHandler)
-	rg.POST("/payment/stripe/create", PaymentStripeCreateHandler)
-	rg.POST("/payment/alipay/create", PaymentAlipayCreateHandler)
-	rg.GET("/payment/alipay/status", PaymentAlipayStatusHandler)
-	rg.POST("/payment/wechat/create", PaymentWechatCreateHandler)
-	rg.GET("/payment/wechat/status", PaymentWechatStatusHandler)
+	rg.GET("/payment/stripe/config", pr.PaymentStripeConfigHandler)
+	rg.POST("/payment/stripe/create", pr.PaymentStripeCreateHandler)
+	rg.POST("/payment/alipay/create", pr.PaymentAlipayCreateHandler)
+	rg.GET("/payment/alipay/status", pr.PaymentAlipayStatusHandler)
+	rg.POST("/payment/wechat/create", pr.PaymentWechatCreateHandler)
+	rg.GET("/payment/wechat/status", pr.PaymentWechatStatusHandler)
 }
 
-func UserUnreadNotificationsHandler(c *gin.Context) {
+func (pr *PanelRouter) UserUnreadNotificationsHandler(c *gin.Context) {
 	opsStore.mu.Lock()
 	defer opsStore.mu.Unlock()
 	count := 0
@@ -175,7 +175,7 @@ func UserUnreadNotificationsHandler(c *gin.Context) {
 	Success(c, gin.H{"unread_count": count})
 }
 
-func UserNotificationsHandler(c *gin.Context) {
+func (pr *PanelRouter) UserNotificationsHandler(c *gin.Context) {
 	page := queryInt(c, "page", 1, 1, 1000000)
 	pageSize := queryInt(c, "page_size", 10, 1, 100)
 	opsStore.mu.Lock()
@@ -193,7 +193,7 @@ func UserNotificationsHandler(c *gin.Context) {
 	Success(c, gin.H{"items": items[start:end], "total": len(items), "page": page, "page_size": pageSize})
 }
 
-func UserReadNotificationHandler(c *gin.Context) {
+func (pr *PanelRouter) UserReadNotificationHandler(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid notification id")
@@ -211,7 +211,7 @@ func UserReadNotificationHandler(c *gin.Context) {
 	Error(c, http.StatusNotFound, apiErrorNotFound, "notification not found")
 }
 
-func UserReadAllNotificationsHandler(c *gin.Context) {
+func (pr *PanelRouter) UserReadAllNotificationsHandler(c *gin.Context) {
 	opsStore.mu.Lock()
 	defer opsStore.mu.Unlock()
 	for i := range opsStore.notifications {
@@ -220,8 +220,8 @@ func UserReadAllNotificationsHandler(c *gin.Context) {
 	Success(c, gin.H{"ok": true})
 }
 
-func UserRedeemHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UserRedeemHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -264,8 +264,8 @@ func UserRedeemHandler(c *gin.Context) {
 	opsStore.redeemCodes[idx].UsedBy = &usedBy
 	opsStore.mu.Unlock()
 
-	if GlobalLedger != nil {
-		if err := GlobalLedger.Credit(c.Request.Context(), bc.UserID, amount, "redeem:"+code); err != nil {
+	if pr.Ledger != nil {
+		if err := pr.Ledger.Credit(c.Request.Context(), bc.UserID, amount, "redeem:"+code); err != nil {
 			opsStore.mu.Lock()
 			// Only roll back if nobody else has reused this code in the interim.
 			if idx < len(opsStore.redeemCodes) && opsStore.redeemCodes[idx].Status == "used" && opsStore.redeemCodes[idx].UsedBy != nil && *opsStore.redeemCodes[idx].UsedBy == usedBy {
@@ -281,8 +281,8 @@ func UserRedeemHandler(c *gin.Context) {
 	Success(c, gin.H{"amount": amount})
 }
 
-func UserRefundListHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UserRefundListHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -297,8 +297,8 @@ func UserRefundListHandler(c *gin.Context) {
 	Success(c, gin.H{"items": items})
 }
 
-func UserRefundApplyHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UserRefundApplyHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -309,7 +309,7 @@ func UserRefundApplyHandler(c *gin.Context) {
 	}
 	// Verify the subscription belongs to the authenticated user.
 	var sub model.Subscription
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", req.SubscriptionID, bc.UserID).First(&sub).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", req.SubscriptionID, bc.UserID).First(&sub).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			Error(c, http.StatusNotFound, apiErrorNotFound, "subscription not found")
 		} else {
@@ -326,8 +326,8 @@ func UserRefundApplyHandler(c *gin.Context) {
 	Success(c, gin.H{"id": rec.ID, "status": rec.Status})
 }
 
-func AdminListAnnouncementsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminListAnnouncementsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	opsStore.mu.Lock()
@@ -337,8 +337,8 @@ func AdminListAnnouncementsHandler(c *gin.Context) {
 	Success(c, gin.H{"items": items})
 }
 
-func AdminCreateAnnouncementHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminCreateAnnouncementHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req createAnnouncementRequest
@@ -357,8 +357,8 @@ func AdminCreateAnnouncementHandler(c *gin.Context) {
 	Success(c, rec)
 }
 
-func AdminUpdateAnnouncementHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminUpdateAnnouncementHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -388,8 +388,8 @@ func AdminUpdateAnnouncementHandler(c *gin.Context) {
 	Error(c, http.StatusNotFound, apiErrorNotFound, "announcement not found")
 }
 
-func AdminDeleteAnnouncementHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminDeleteAnnouncementHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -409,8 +409,8 @@ func AdminDeleteAnnouncementHandler(c *gin.Context) {
 	Error(c, http.StatusNotFound, apiErrorNotFound, "announcement not found")
 }
 
-func AdminListOrdersHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminListOrdersHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	page := queryInt(c, "page", 1, 1, 1000000)
@@ -449,8 +449,8 @@ func AdminListOrdersHandler(c *gin.Context) {
 	Success(c, gin.H{"items": filtered[start:end], "total": total, "page": page, "page_size": pageSize})
 }
 
-func AdminListRedeemCodesHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminListRedeemCodesHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	opsStore.mu.Lock()
@@ -460,8 +460,8 @@ func AdminListRedeemCodesHandler(c *gin.Context) {
 	Success(c, gin.H{"items": items})
 }
 
-func AdminCreateRedeemCodesHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminCreateRedeemCodesHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req createRedeemCodeRequest
@@ -480,8 +480,8 @@ func AdminCreateRedeemCodesHandler(c *gin.Context) {
 	Success(c, gin.H{"created": req.Count})
 }
 
-func AdminDeleteRedeemCodeHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminDeleteRedeemCodeHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -501,12 +501,12 @@ func AdminDeleteRedeemCodeHandler(c *gin.Context) {
 	Error(c, http.StatusNotFound, apiErrorNotFound, "redeem code not found")
 }
 
-func AdminListPricingGroupsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminListPricingGroupsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var groups []model.Group
-	if err := GlobalDB.WithContext(c.Request.Context()).Order("name ASC").Find(&groups).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Order("name ASC").Find(&groups).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
 		return
 	}
@@ -517,8 +517,8 @@ func AdminListPricingGroupsHandler(c *gin.Context) {
 	Success(c, items)
 }
 
-func AdminUpsertPricingGroupHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminUpsertPricingGroupHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req struct {
@@ -531,9 +531,9 @@ func AdminUpsertPricingGroupHandler(c *gin.Context) {
 	}
 	name := strings.TrimSpace(req.GroupName)
 	var g model.Group
-	err := GlobalDB.WithContext(c.Request.Context()).Where("name = ?", name).First(&g).Error
+	err := pr.DB.WithContext(c.Request.Context()).Where("name = ?", name).First(&g).Error
 	if err == nil {
-		if e := GlobalDB.WithContext(c.Request.Context()).Model(&g).Update("rate_multiplier", req.DiscountRate).Error; e != nil {
+		if e := pr.DB.WithContext(c.Request.Context()).Model(&g).Update("rate_multiplier", req.DiscountRate).Error; e != nil {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to update group")
 			return
 		}
@@ -541,15 +541,15 @@ func AdminUpsertPricingGroupHandler(c *gin.Context) {
 		return
 	}
 	g = model.Group{Name: name, RateMultiplier: req.DiscountRate}
-	if e := GlobalDB.WithContext(c.Request.Context()).Create(&g).Error; e != nil {
+	if e := pr.DB.WithContext(c.Request.Context()).Create(&g).Error; e != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create group")
 		return
 	}
 	Success(c, gin.H{"group_name": name, "discount_rate": req.DiscountRate})
 }
 
-func AdminDeletePricingGroupHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminDeletePricingGroupHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	name := strings.TrimSpace(c.Param("name"))
@@ -557,7 +557,7 @@ func AdminDeletePricingGroupHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid group name")
 		return
 	}
-	res := GlobalDB.WithContext(c.Request.Context()).Where("name = ?", name).Delete(&model.Group{})
+	res := pr.DB.WithContext(c.Request.Context()).Where("name = ?", name).Delete(&model.Group{})
 	if res.Error != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to delete group")
 		return
@@ -569,8 +569,8 @@ func AdminDeletePricingGroupHandler(c *gin.Context) {
 	Success(c, gin.H{"deleted": true})
 }
 
-func AdminListRefundsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminListRefundsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	page := queryInt(c, "page", 1, 1, 1000000)
@@ -598,8 +598,8 @@ func AdminListRefundsHandler(c *gin.Context) {
 	Success(c, gin.H{"items": filtered[start:end], "total": total, "page": page, "page_size": pageSize})
 }
 
-func AdminApproveRefundHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminApproveRefundHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -607,7 +607,7 @@ func AdminApproveRefundHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid id")
 		return
 	}
-	bc, _ := requireBillingCtx(c)
+	bc, _ := pr.requireBillingCtx(c)
 	opsStore.mu.Lock()
 	defer opsStore.mu.Unlock()
 	for i := range opsStore.refunds {
@@ -626,8 +626,8 @@ func AdminApproveRefundHandler(c *gin.Context) {
 	Error(c, http.StatusNotFound, apiErrorNotFound, "refund not found")
 }
 
-func AdminRejectRefundHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminRejectRefundHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -635,7 +635,7 @@ func AdminRejectRefundHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid id")
 		return
 	}
-	bc, _ := requireBillingCtx(c)
+	bc, _ := pr.requireBillingCtx(c)
 	opsStore.mu.Lock()
 	defer opsStore.mu.Unlock()
 	for i := range opsStore.refunds {
@@ -654,12 +654,12 @@ func AdminRejectRefundHandler(c *gin.Context) {
 	Error(c, http.StatusNotFound, apiErrorNotFound, "refund not found")
 }
 
-func PaymentStripeConfigHandler(c *gin.Context) {
+func (pr *PanelRouter) PaymentStripeConfigHandler(c *gin.Context) {
 	Success(c, gin.H{"publishable_key": "", "mode": "sandbox", "enabled": false})
 }
 
-func PaymentStripeCreateHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) PaymentStripeCreateHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -681,8 +681,8 @@ func PaymentStripeCreateHandler(c *gin.Context) {
 	Success(c, gin.H{"client_secret": paymentIntentID + "_secret_local_mock", "order_id": orderID, "payment_intent_id": paymentIntentID, "amount_usd": req.Amount})
 }
 
-func PaymentAlipayCreateHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) PaymentAlipayCreateHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -704,8 +704,8 @@ func PaymentAlipayCreateHandler(c *gin.Context) {
 	Success(c, gin.H{"order_id": orderID, "pay_url": payURL, "qr_code": payURL, "amount_usd": req.Amount, "amount_local": req.Amount * 7.2, "currency": "CNY"})
 }
 
-func PaymentAlipayStatusHandler(c *gin.Context) {
-	if _, ok := requireBillingCtx(c); !ok {
+func (pr *PanelRouter) PaymentAlipayStatusHandler(c *gin.Context) {
+	if _, ok := pr.requireBillingCtx(c); !ok {
 		return
 	}
 	orderID := strings.TrimSpace(c.Query("order_id"))
@@ -721,8 +721,8 @@ func PaymentAlipayStatusHandler(c *gin.Context) {
 	Success(c, gin.H{"status": order.Status, "order_id": orderID, "amount": order.AmountUSD, "paid_at": order.PaidAt})
 }
 
-func PaymentWechatCreateHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) PaymentWechatCreateHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -743,8 +743,8 @@ func PaymentWechatCreateHandler(c *gin.Context) {
 	Success(c, gin.H{"order_id": orderID, "code_url": orderID, "amount_usd": req.Amount, "amount_local": req.Amount * 7.2, "currency": "CNY"})
 }
 
-func PaymentWechatStatusHandler(c *gin.Context) {
-	if _, ok := requireBillingCtx(c); !ok {
+func (pr *PanelRouter) PaymentWechatStatusHandler(c *gin.Context) {
+	if _, ok := pr.requireBillingCtx(c); !ok {
 		return
 	}
 	orderID := strings.TrimSpace(c.Query("order_id"))
@@ -779,8 +779,8 @@ func paymentOrderByPublicID(orderID string) (paymentOrderRecord, bool) {
 	return paymentOrderRecord{}, false
 }
 
-func AdminUsageLogsHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminUsageLogsHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	page := queryInt(c, "page", 1, 1, 1000000)
@@ -791,7 +791,7 @@ func AdminUsageLogsHandler(c *gin.Context) {
 	startDate := strings.TrimSpace(c.Query("start_date"))
 	endDate := strings.TrimSpace(c.Query("end_date"))
 
-	base := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{})
+	base := pr.DB.WithContext(c.Request.Context()).Model(&model.UsageLog{})
 	if modelQuery != "" {
 		base = base.Where("model = ?", modelQuery)
 	}
@@ -850,8 +850,8 @@ func AdminUsageLogsHandler(c *gin.Context) {
 	Success(c, gin.H{"items": items, "page": page, "page_size": pageSize, "total": total})
 }
 
-func AdminModelCatalogModelsURLGetHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminModelCatalogModelsURLGetHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	channelKey := strings.TrimSpace(c.Query("channel_key"))
@@ -860,15 +860,15 @@ func AdminModelCatalogModelsURLGetHandler(c *gin.Context) {
 		return
 	}
 	var entry model.ModelCatalogEntry
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND models_url <> ''", channelKey).First(&entry).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("channel_key = ? AND models_url <> ''", channelKey).First(&entry).Error; err != nil {
 		Success(c, gin.H{"models_url": ""})
 		return
 	}
 	Success(c, gin.H{"models_url": entry.ModelsURL})
 }
 
-func AdminModelCatalogModelsURLPutHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminModelCatalogModelsURLPutHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req struct {
@@ -880,15 +880,15 @@ func AdminModelCatalogModelsURLPutHandler(c *gin.Context) {
 		return
 	}
 	entry := model.ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: "__models_url__", Visible: false, ModelsURL: strings.TrimSpace(req.ModelsURL)}
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).Assign(entry).FirstOrCreate(&entry).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).Assign(entry).FirstOrCreate(&entry).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save models url")
 		return
 	}
 	Success(c, gin.H{"ok": true, "models_url": entry.ModelsURL})
 }
 
-func AdminModelCatalogEnsureOpenAIChannelHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminModelCatalogEnsureOpenAIChannelHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req struct {
@@ -906,7 +906,7 @@ func AdminModelCatalogEnsureOpenAIChannelHandler(c *gin.Context) {
 			continue
 		}
 		entry := model.ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: modelID, Visible: true}
-		res := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).FirstOrCreate(&entry)
+		res := pr.DB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).FirstOrCreate(&entry)
 		if res.Error != nil {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to ensure model catalog")
 			return
@@ -918,8 +918,8 @@ func AdminModelCatalogEnsureOpenAIChannelHandler(c *gin.Context) {
 	Success(c, gin.H{"ok": true, "created": created})
 }
 
-func AdminModelCatalogOpenAIVisibilityHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminModelCatalogOpenAIVisibilityHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req struct {
@@ -932,15 +932,15 @@ func AdminModelCatalogOpenAIVisibilityHandler(c *gin.Context) {
 		return
 	}
 	entry := model.ModelCatalogEntry{ChannelKey: strings.TrimSpace(req.ChannelKey), ModelID: strings.TrimSpace(req.ModelID), Visible: req.Visible}
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).Assign(map[string]any{"visible": req.Visible}).FirstOrCreate(&entry).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("channel_key = ? AND model_id = ?", entry.ChannelKey, entry.ModelID).Assign(map[string]any{"visible": req.Visible}).FirstOrCreate(&entry).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save visibility")
 		return
 	}
 	Success(c, gin.H{"ok": true, "channel_key": entry.ChannelKey, "model_id": entry.ModelID, "visible": req.Visible})
 }
 
-func AdminUpsertPricingModelHandler(c *gin.Context) {
-	if !requireAdmin(c) {
+func (pr *PanelRouter) AdminUpsertPricingModelHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
 		return
 	}
 	var req struct {
@@ -955,7 +955,7 @@ func AdminUpsertPricingModelHandler(c *gin.Context) {
 		return
 	}
 	price := model.ModelPrice{ModelID: strings.TrimSpace(req.ModelID), InputPricePer1M: req.InputPricePer1M, OutputPricePer1M: req.OutputPricePer1M, CachedInputPricePer1M: req.CachedInputPricePer1M, ReasoningPricePer1M: req.ReasoningPricePer1M}
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("model_id = ?", price.ModelID).Assign(price).FirstOrCreate(&price).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("model_id = ?", price.ModelID).Assign(price).FirstOrCreate(&price).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save model price")
 		return
 	}

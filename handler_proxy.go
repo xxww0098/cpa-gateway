@@ -68,8 +68,8 @@ func InitSDK(cfg *Config) error {
 		return fmt.Errorf("loading SDK auth store: %w", err)
 	}
 
-	openAIConfig := cfg.SDK.openAIProviderConfig()
-	if openAIConfig.complete() {
+	openAIConfig := cfg.SDK.OpenAIProviderConfig()
+	if openAIConfig.Complete() {
 		exec, err := executor.NewOpenAICompatibleExecutor(providerConfigFromSDK(openAIConfig), cfg.SDK.TimeoutSeconds)
 		if err != nil {
 			authManager = nil
@@ -105,7 +105,7 @@ func InitSDK(cfg *Config) error {
 		return err
 	}
 	manager.RegisterExecutor(claudeExec)
-	if claudeConfig.complete() {
+	if claudeConfig.Complete() {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-claude",
@@ -135,7 +135,7 @@ func InitSDK(cfg *Config) error {
 		return err
 	}
 	manager.RegisterExecutor(geminiExec)
-	if geminiConfig.complete() {
+	if geminiConfig.Complete() {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-gemini",
@@ -165,7 +165,7 @@ func InitSDK(cfg *Config) error {
 		return err
 	}
 	manager.RegisterExecutor(codexExec)
-	if codexConfig.configured() && strings.TrimSpace(codexConfig.APIKey) != "" {
+	if codexConfig.Configured() && strings.TrimSpace(codexConfig.APIKey) != "" {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-codex",
@@ -198,7 +198,7 @@ func InitSDK(cfg *Config) error {
 		return err
 	}
 	manager.RegisterExecutor(vertexExec)
-	if vertexConfig.configured() && strings.TrimSpace(vertexConfig.APIKey) != "" {
+	if vertexConfig.Configured() && strings.TrimSpace(vertexConfig.APIKey) != "" {
 		now := time.Now().UTC()
 		_, err = manager.Register(context.Background(), &cliproxyauth.Auth{
 			ID:        "cpa-gateway-vertex",
@@ -230,11 +230,11 @@ func InitSDK(cfg *Config) error {
 }
 
 func logPendingProviderExecutors(cfg SDKConfig) {
-	for provider, providerConfig := range cfg.pendingProviderConfigs() {
+	for provider, providerConfig := range cfg.PendingProviderConfigs() {
 		if provider == proxyProviderClaude || provider == proxyProviderGemini || provider == proxyProviderCodex || provider == proxyProviderVertex {
 			continue
 		}
-		if providerConfig.configured() {
+		if providerConfig.Configured() {
 			slog.Warn("CLIProxyAPI SDK provider configured but executor is pending implementation", "provider", provider)
 		}
 	}

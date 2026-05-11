@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -53,26 +53,26 @@ type balanceHistoryItem struct {
 }
 
 // RegisterUserRoutes wires authenticated panel user endpoints onto a Gin router group.
-func RegisterUserRoutes(rg *gin.RouterGroup) {
-	rg.GET("/user/profile", UserProfileHandler)
-	rg.GET("/user/api-keys", ListAPIKeysHandler)
-	rg.POST("/user/api-keys", CreateAPIKeyHandler)
-	rg.DELETE("/user/api-keys/:id", DeleteAPIKeyHandler)
-	rg.PATCH("/user/api-keys/:id/group", RebindAPIKeyGroupHandler)
-	rg.GET("/user/available-groups", AvailableGroupsHandler)
-	rg.GET("/user/usage", UsageHandler)
-	rg.GET("/user/usage/detail", UsageDetailHandler)
-	rg.GET("/user/usage/stats", UsageStatsHandler)
-	rg.GET("/user/usage/trend", UserUsageTrendHandler)
-	rg.GET("/user/usage/models", UserUsageModelsHandler)
-	rg.GET("/user/balance-history", BalanceHistoryHandler)
-	rg.GET("/user/announcements", UserAnnouncementsHandler)
-	rg.GET("/user/models", ModelsHandler)
-	rg.GET("/user/tickets", UserListTicketsHandler)
-	rg.POST("/user/tickets", UserCreateTicketHandler)
-	rg.GET("/user/tickets/:id", UserGetTicketHandler)
-	rg.POST("/user/tickets/:id/replies", UserCreateTicketReplyHandler)
-	rg.POST("/user/ticket-images", UserUploadTicketImageHandler)
+func (pr *PanelRouter) RegisterUserRoutes(rg *gin.RouterGroup) {
+	rg.GET("/user/profile", pr.UserProfileHandler)
+	rg.GET("/user/api-keys", pr.ListAPIKeysHandler)
+	rg.POST("/user/api-keys", pr.CreateAPIKeyHandler)
+	rg.DELETE("/user/api-keys/:id", pr.DeleteAPIKeyHandler)
+	rg.PATCH("/user/api-keys/:id/group", pr.RebindAPIKeyGroupHandler)
+	rg.GET("/user/available-groups", pr.AvailableGroupsHandler)
+	rg.GET("/user/usage", pr.UsageHandler)
+	rg.GET("/user/usage/detail", pr.UsageDetailHandler)
+	rg.GET("/user/usage/stats", pr.UsageStatsHandler)
+	rg.GET("/user/usage/trend", pr.UserUsageTrendHandler)
+	rg.GET("/user/usage/models", pr.UserUsageModelsHandler)
+	rg.GET("/user/balance-history", pr.BalanceHistoryHandler)
+	rg.GET("/user/announcements", pr.UserAnnouncementsHandler)
+	rg.GET("/user/models", pr.ModelsHandler)
+	rg.GET("/user/tickets", pr.UserListTicketsHandler)
+	rg.POST("/user/tickets", pr.UserCreateTicketHandler)
+	rg.GET("/user/tickets/:id", pr.UserGetTicketHandler)
+	rg.POST("/user/tickets/:id/replies", pr.UserCreateTicketReplyHandler)
+	rg.POST("/user/ticket-images", pr.UserUploadTicketImageHandler)
 }
 
 type rebindGroupRequest struct {
@@ -117,30 +117,30 @@ type usageDetailStats struct {
 	AvgDurationMs     float64 `json:"avg_duration_ms"`
 }
 
-func UserProfileHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UserProfileHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
-	if GlobalDB == nil {
+	if pr.DB == nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "database not initialized")
 		return
 	}
 
 	var user model.User
-	if err := GlobalDB.WithContext(c.Request.Context()).First(&user, bc.UserID).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).First(&user, bc.UserID).Error; err != nil {
 		handleRecordError(c, err, "failed to load user")
 		return
 	}
 
-	if isAdminEmail(user.Email) && user.Role != "admin" {
-		GlobalDB.WithContext(c.Request.Context()).Model(&user).Update("role", "admin")
+	if pr.isAdminEmail(user.Email) && user.Role != "admin" {
+		pr.DB.WithContext(c.Request.Context()).Model(&user).Update("role", "admin")
 		user.Role = "admin"
 	}
 
 	available := user.Balance
-	if GlobalLedger != nil {
-		balance, err := GlobalLedger.GetBalance(c.Request.Context(), user.ID)
+	if pr.Ledger != nil {
+		balance, err := pr.Ledger.GetBalance(c.Request.Context(), user.ID)
 		if err != nil {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load balance")
 			return
@@ -151,14 +151,14 @@ func UserProfileHandler(c *gin.Context) {
 	Success(c, gin.H{"user": authUserFromModel(user), "available_balance": available})
 }
 
-func ListAPIKeysHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) ListAPIKeysHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
 
 	var keys []model.ApiKey
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("user_id = ? AND status <> ?", bc.UserID, "revoked").Order("created_at DESC").Find(&keys).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("user_id = ? AND status <> ?", bc.UserID, "revoked").Order("created_at DESC").Find(&keys).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list API keys")
 		return
 	}
@@ -186,8 +186,8 @@ func ListAPIKeysHandler(c *gin.Context) {
 	})
 }
 
-func CreateAPIKeyHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) CreateAPIKeyHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -204,7 +204,7 @@ func CreateAPIKeyHandler(c *gin.Context) {
 		return
 	}
 
-	plaintext, apiKey, err := GenerateAPIKey(bc.UserID, name, nil)
+	plaintext, apiKey, err := pr.GenerateAPIKey(bc.UserID, name, nil)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create API key")
 		return
@@ -219,8 +219,8 @@ func CreateAPIKeyHandler(c *gin.Context) {
 	})
 }
 
-func DeleteAPIKeyHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) DeleteAPIKeyHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -231,7 +231,7 @@ func DeleteAPIKeyHandler(c *gin.Context) {
 		return
 	}
 
-	res := GlobalDB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("id = ? AND user_id = ?", id, bc.UserID).Update("status", "revoked")
+	res := pr.DB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("id = ? AND user_id = ?", id, bc.UserID).Update("status", "revoked")
 	if res.Error != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to revoke API key")
 		return
@@ -244,13 +244,13 @@ func DeleteAPIKeyHandler(c *gin.Context) {
 	Success(c, gin.H{"revoked": true})
 }
 
-func AvailableGroupsHandler(c *gin.Context) {
-	if _, ok := requireBillingCtx(c); !ok {
+func (pr *PanelRouter) AvailableGroupsHandler(c *gin.Context) {
+	if _, ok := pr.requireBillingCtx(c); !ok {
 		return
 	}
 
 	var groups []model.Group
-	if err := GlobalDB.WithContext(c.Request.Context()).Order("id ASC").Find(&groups).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Order("id ASC").Find(&groups).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
 		return
 	}
@@ -273,8 +273,8 @@ func AvailableGroupsHandler(c *gin.Context) {
 	Success(c, items)
 }
 
-func RebindAPIKeyGroupHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) RebindAPIKeyGroupHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -292,7 +292,7 @@ func RebindAPIKeyGroupHandler(c *gin.Context) {
 	}
 
 	var key model.ApiKey
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", id, bc.UserID).First(&key).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", id, bc.UserID).First(&key).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			Error(c, http.StatusNotFound, apiErrorNotFound, "API key not found")
 			return
@@ -303,7 +303,7 @@ func RebindAPIKeyGroupHandler(c *gin.Context) {
 
 	if req.GroupID != nil {
 		var group model.Group
-		if err := GlobalDB.WithContext(c.Request.Context()).First(&group, *req.GroupID).Error; err != nil {
+		if err := pr.DB.WithContext(c.Request.Context()).First(&group, *req.GroupID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				Error(c, http.StatusBadRequest, apiErrorBadRequest, "group not found")
 				return
@@ -313,7 +313,7 @@ func RebindAPIKeyGroupHandler(c *gin.Context) {
 		}
 	}
 
-	if err := GlobalDB.WithContext(c.Request.Context()).Model(&key).Update("group_id", req.GroupID).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Model(&key).Update("group_id", req.GroupID).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to update API key group")
 		return
 	}
@@ -325,8 +325,8 @@ func RebindAPIKeyGroupHandler(c *gin.Context) {
 	})
 }
 
-func UsageHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UsageHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -336,7 +336,7 @@ func UsageHandler(c *gin.Context) {
 	offset := (page - 1) * pageSize
 
 	var total int64
-	base := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("user_id = ?", bc.UserID)
+	base := pr.DB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("user_id = ?", bc.UserID)
 	if err := base.Count(&total).Error; err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to count usage")
 		return
@@ -357,8 +357,8 @@ func UsageHandler(c *gin.Context) {
 	})
 }
 
-func UsageDetailHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UsageDetailHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -367,8 +367,8 @@ func UsageDetailHandler(c *gin.Context) {
 	pageSize := queryInt(c, "page_size", 20, 1, 100)
 	offset := (page - 1) * pageSize
 
-	base := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("usage_logs.user_id = ?", bc.UserID)
-	base, valid := applyUsageDetailFilters(c, base, bc.UserID)
+	base := pr.DB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("usage_logs.user_id = ?", bc.UserID)
+	base, valid := pr.applyUsageDetailFilters(c, base, bc.UserID)
 	if !valid {
 		return
 	}
@@ -391,7 +391,7 @@ func UsageDetailHandler(c *gin.Context) {
 		return
 	}
 
-	keyNames, err := apiKeyNamesForUsageLogs(c, bc.UserID, logs)
+	keyNames, err := pr.apiKeyNamesForUsageLogs(c, bc.UserID, logs)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load API key names")
 		return
@@ -434,8 +434,8 @@ func UsageDetailHandler(c *gin.Context) {
 	})
 }
 
-func UsageStatsHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UsageStatsHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -445,17 +445,17 @@ func UsageStatsHandler(c *gin.Context) {
 	week := today.AddDate(0, 0, -6)
 	month := today.AddDate(0, 0, -29)
 
-	todayStats, err := usageStatsSince(c, bc.UserID, today)
+	todayStats, err := pr.usageStatsSince(c, bc.UserID, today)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load today usage stats")
 		return
 	}
-	weekStats, err := usageStatsSince(c, bc.UserID, week)
+	weekStats, err := pr.usageStatsSince(c, bc.UserID, week)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load week usage stats")
 		return
 	}
-	monthStats, err := usageStatsSince(c, bc.UserID, month)
+	monthStats, err := pr.usageStatsSince(c, bc.UserID, month)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load month usage stats")
 		return
@@ -464,13 +464,13 @@ func UsageStatsHandler(c *gin.Context) {
 	Success(c, gin.H{"today": todayStats, "week": weekStats, "month": monthStats})
 }
 
-func UserUsageTrendHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UserUsageTrendHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
 	days := queryInt(c, "days", 7, 1, 30)
-	points, err := buildUsageTrend(c, bc.UserID, days)
+	points, err := pr.buildUsageTrend(c, bc.UserID, days)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load usage trend")
 		return
@@ -478,13 +478,13 @@ func UserUsageTrendHandler(c *gin.Context) {
 	Success(c, points)
 }
 
-func UserUsageModelsHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) UserUsageModelsHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
 	days := queryInt(c, "days", 30, 1, 90)
-	items, err := buildUsageModels(c, bc.UserID, days)
+	items, err := pr.buildUsageModels(c, bc.UserID, days)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load usage models")
 		return
@@ -492,8 +492,8 @@ func UserUsageModelsHandler(c *gin.Context) {
 	Success(c, items)
 }
 
-func UserAnnouncementsHandler(c *gin.Context) {
-	if _, ok := requireBillingCtx(c); !ok {
+func (pr *PanelRouter) UserAnnouncementsHandler(c *gin.Context) {
+	if _, ok := pr.requireBillingCtx(c); !ok {
 		return
 	}
 	Success(c, []gin.H{{
@@ -503,13 +503,14 @@ func UserAnnouncementsHandler(c *gin.Context) {
 	}})
 }
 
-// visibleCatalogModelIDsSorted returns distinct visible catalog model IDs (excluding the models_url sentinel row), sorted.
-func visibleCatalogModelIDsSorted(ctx context.Context) ([]string, error) {
-	if GlobalDB == nil {
+// visibleCatalogModelIDsSorted returns distinct visible catalog model IDs
+// (excluding the models_url sentinel row), sorted.
+func (pr *PanelRouter) visibleCatalogModelIDsSorted(ctx context.Context) ([]string, error) {
+	if pr.DB == nil {
 		return nil, errors.New("database not initialized")
 	}
 	var entries []model.ModelCatalogEntry
-	if err := GlobalDB.WithContext(ctx).
+	if err := pr.DB.WithContext(ctx).
 		Where("visible = ? AND model_id <> ?", true, "__models_url__").
 		Find(&entries).Error; err != nil {
 		return nil, err
@@ -530,15 +531,15 @@ func visibleCatalogModelIDsSorted(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// listPanelModelCatalog loads visible models with per-million token prices from model_prices.
-func listPanelModelCatalog(ctx context.Context) ([]gin.H, error) {
-	ids, err := visibleCatalogModelIDsSorted(ctx)
+// listPanelModelCatalog loads visible models with per-million token prices.
+func (pr *PanelRouter) listPanelModelCatalog(ctx context.Context) ([]gin.H, error) {
+	ids, err := pr.visibleCatalogModelIDsSorted(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var prices []model.ModelPrice
 	if len(ids) > 0 {
-		if err := GlobalDB.WithContext(ctx).Where("model_id IN ?", ids).Find(&prices).Error; err != nil {
+		if err := pr.DB.WithContext(ctx).Where("model_id IN ?", ids).Find(&prices).Error; err != nil {
 			return nil, err
 		}
 	}
@@ -560,12 +561,12 @@ func listPanelModelCatalog(ctx context.Context) ([]gin.H, error) {
 	return out, nil
 }
 
-func ModelsHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) ModelsHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
-	models, err := listPanelModelCatalog(c.Request.Context())
+	models, err := pr.listPanelModelCatalog(c.Request.Context())
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load model catalog")
 		return
@@ -576,8 +577,8 @@ func ModelsHandler(c *gin.Context) {
 	})
 }
 
-func BalanceHistoryHandler(c *gin.Context) {
-	bc, ok := requireBillingCtx(c)
+func (pr *PanelRouter) BalanceHistoryHandler(c *gin.Context) {
+	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
 		return
 	}
@@ -586,7 +587,7 @@ func BalanceHistoryHandler(c *gin.Context) {
 	pageSize := queryInt(c, "page_size", 20, 1, 100)
 	kind := strings.TrimSpace(c.Query("kind"))
 
-	db := GlobalDB.WithContext(c.Request.Context()).Model(&model.BalanceLog{}).Where("user_id = ?", bc.UserID)
+	db := pr.DB.WithContext(c.Request.Context()).Model(&model.BalanceLog{}).Where("user_id = ?", bc.UserID)
 	if kind != "" {
 		db = db.Where("type = ?", kind)
 	}
@@ -604,7 +605,6 @@ func BalanceHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	// Compute cumulative sum forward; then reverse for DESC display.
 	type enriched struct {
 		BalanceBefore float64
 		BalanceAfter  float64
@@ -617,12 +617,10 @@ func BalanceHistoryHandler(c *gin.Context) {
 		running += log.Amount
 		allItems = append(allItems, enriched{BalanceBefore: before, BalanceAfter: running, Log: log})
 	}
-	// Reverse to DESC (newest first).
 	for i, j := 0, len(allItems)-1; i < j; i, j = i+1, j-1 {
 		allItems[i], allItems[j] = allItems[j], allItems[i]
 	}
 
-	// Slice the current page.
 	offset := (page - 1) * pageSize
 	if offset > len(allItems) {
 		offset = len(allItems)
@@ -659,13 +657,13 @@ func BalanceHistoryHandler(c *gin.Context) {
 	})
 }
 
-func requireBillingCtx(c *gin.Context) (*BillingCtx, bool) {
+func (pr *PanelRouter) requireBillingCtx(c *gin.Context) (*BillingCtx, bool) {
 	bc, ok := billingContextFromGin(c)
 	if !ok || bc.UserID == 0 {
 		Error(c, http.StatusUnauthorized, apiErrorUnauthorized, "authentication context required")
 		return nil, false
 	}
-	if GlobalDB == nil {
+	if pr.DB == nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "database not initialized")
 		return nil, false
 	}
@@ -694,7 +692,7 @@ func queryInt(c *gin.Context, name string, def, min, max int) int {
 	return value
 }
 
-func applyUsageDetailFilters(c *gin.Context, q *gorm.DB, userID uint) (*gorm.DB, bool) {
+func (pr *PanelRouter) applyUsageDetailFilters(c *gin.Context, q *gorm.DB, userID uint) (*gorm.DB, bool) {
 	if apiKeyIDRaw := strings.TrimSpace(c.Query("api_key_id")); apiKeyIDRaw != "" {
 		apiKeyID, err := strconv.ParseUint(apiKeyIDRaw, 10, 64)
 		if err != nil || apiKeyID == 0 {
@@ -702,7 +700,7 @@ func applyUsageDetailFilters(c *gin.Context, q *gorm.DB, userID uint) (*gorm.DB,
 			return nil, false
 		}
 		var count int64
-		if err := GlobalDB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("id = ? AND user_id = ?", uint(apiKeyID), userID).Count(&count).Error; err != nil {
+		if err := pr.DB.WithContext(c.Request.Context()).Model(&model.ApiKey{}).Where("id = ? AND user_id = ?", uint(apiKeyID), userID).Count(&count).Error; err != nil {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to validate API key")
 			return nil, false
 		}
@@ -785,7 +783,7 @@ func usageDetailStatsForQuery(q *gorm.DB, total int64) (usageDetailStats, error)
 	}, nil
 }
 
-func apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []model.UsageLog) (map[uint]string, error) {
+func (pr *PanelRouter) apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []model.UsageLog) (map[uint]string, error) {
 	ids := make([]uint, 0, len(logs))
 	seen := map[uint]bool{}
 	for _, log := range logs {
@@ -800,7 +798,7 @@ func apiKeyNamesForUsageLogs(c *gin.Context, userID uint, logs []model.UsageLog)
 	}
 
 	var keys []model.ApiKey
-	if err := GlobalDB.WithContext(c.Request.Context()).Where("user_id = ? AND id IN ?", userID, ids).Find(&keys).Error; err != nil {
+	if err := pr.DB.WithContext(c.Request.Context()).Where("user_id = ? AND id IN ?", userID, ids).Find(&keys).Error; err != nil {
 		return nil, err
 	}
 	names := make(map[uint]string, len(keys))
@@ -845,7 +843,7 @@ func usageRateMultiplier(log model.UsageLog) float64 {
 	return 1.0
 }
 
-func usageStatsSince(c *gin.Context, userID uint, since time.Time) (gin.H, error) {
+func (pr *PanelRouter) usageStatsSince(c *gin.Context, userID uint, since time.Time) (gin.H, error) {
 	type statsRow struct {
 		Requests  int64
 		TokensIn  int
@@ -854,7 +852,7 @@ func usageStatsSince(c *gin.Context, userID uint, since time.Time) (gin.H, error
 	}
 
 	var row statsRow
-	err := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).
+	err := pr.DB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).
 		Select("COUNT(*) AS requests, COALESCE(SUM(CASE WHEN input_tokens > 0 THEN input_tokens ELSE tokens_in END), 0) AS tokens_in, COALESCE(SUM(CASE WHEN output_tokens > 0 THEN output_tokens ELSE tokens_out END), 0) AS tokens_out, COALESCE(SUM(CASE WHEN actual_cost > 0 THEN actual_cost ELSE cost END), 0) AS cost").
 		Where("user_id = ? AND created_at >= ?", userID, since).
 		Scan(&row).Error
@@ -871,11 +869,11 @@ func usageStatsSince(c *gin.Context, userID uint, since time.Time) (gin.H, error
 	}, nil
 }
 
-func buildUsageTrend(c *gin.Context, userID uint, days int) ([]trendPoint, error) {
+func (pr *PanelRouter) buildUsageTrend(c *gin.Context, userID uint, days int) ([]trendPoint, error) {
 	since := time.Now().AddDate(0, 0, -(days - 1))
 	start := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.Local)
 
-	q := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", start)
+	q := pr.DB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", start)
 	if userID > 0 {
 		q = q.Where("user_id = ?", userID)
 	}
@@ -909,11 +907,11 @@ func buildUsageTrend(c *gin.Context, userID uint, days int) ([]trendPoint, error
 	return points, nil
 }
 
-func buildUsageModels(c *gin.Context, userID uint, days int) ([]modelPoint, error) {
+func (pr *PanelRouter) buildUsageModels(c *gin.Context, userID uint, days int) ([]modelPoint, error) {
 	since := time.Now().AddDate(0, 0, -(days - 1))
 	start := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.Local)
 
-	q := GlobalDB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", start)
+	q := pr.DB.WithContext(c.Request.Context()).Model(&model.UsageLog{}).Where("created_at >= ?", start)
 	if userID > 0 {
 		q = q.Where("user_id = ?", userID)
 	}
