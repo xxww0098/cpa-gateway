@@ -14,6 +14,7 @@ import (
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 const (
@@ -262,4 +263,119 @@ func geminiRequestedModel(req cliproxyexecutor.Request, opts cliproxyexecutor.Op
 		return value
 	}
 	return stringFromMap(opts.Metadata, cliproxyexecutor.RequestedModelMetadataKey)
+}
+
+// publishUsage emits a usage.Record to the SDK default manager. Gemini's
+// usageMetadata envelope maps promptTokenCount → Input, candidatesTokenCount →
+// Output, thoughtsTokenCount → Reasoning, and cachedContentTokenCount →
+// Cached. When parsing fails the record is still published with zero Detail so
+// downstream UsagePlugin can fall back to heuristic accounting.
+func (e *GeminiExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+	rec := cliproxyusage.Record{
+		Provider:    providerGemini,
+		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
+		Source:      providerGemini,
+		RequestedAt: startedAt,
+		Latency:     time.Since(startedAt),
+		Failed:      failed,
+	}
+	if auth != nil {
+		rec.AuthID = auth.ID
+		rec.AuthIndex = auth.Index
+		rec.AuthType = auth.Provider
+	}
+	if parsed {
+		rec.Detail = cliproxyusage.Detail{
+			InputTokens:     tokens.Input,
+			OutputTokens:    tokens.Output,
+			ReasoningTokens: tokens.Reasoning,
+			CachedTokens:    tokens.Cached,
+			TotalTokens:     tokens.Input + tokens.Output,
+		}
+	}
+	if failed {
+		rec.Fail = cliproxyusage.Failure{
+			StatusCode: status,
+			Body:       truncateGeminiFailureBody(payload),
+		}
+	}
+	cliproxyusage.PublishRecord(ctx, rec)
+}
+
+// publishStreamUsage parses the accumulated streaming body and delegates to
+// publishUsage. Gemini streamGenerateContent yields either SSE-framed `data:
+// {json}` events (when `alt=sse` is set, as this executor does) or newline-
+// separated JSON chunks. The final chunk carries the aggregate `usageMetadata`
+// envelope, so we scan all events and keep the last successful parse.
+func (e *GeminiExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, body []byte, failed bool, status int, startedAt time.Time) {
+	tokens, ok := UsageTokens{}, false
+	if len(body) > 0 {
+		tokens, ok = parseGeminiStreamUsage(body)
+	}
+	e.publishUsage(ctx, auth, tokens, ok, failed, status, nil, startedAt)
+}
+
+// parseGeminiStreamUsage scans a streamGenerateContent response body for the
+// last chunk that carries usageMetadata. Two shapes are tolerated:
+//
+//  1. SSE framing (`alt=sse`): every chunk is prefixed with `data: ` and
+//     separated by a blank line. The final non-`[DONE]` data event carries
+//     the aggregate usageMetadata.
+//  2. NDJSON-ish framing: JSON objects separated by `\n\n`. Same semantics as
+//     above minus the `data: ` prefix.
+//
+// A plain JSON body is also tolerated (fast path) for safety. Falls back to
+// (zero, false) when no chunk yields parseable usage.
+func parseGeminiStreamUsage(body []byte) (UsageTokens, bool) {
+	// Fast path: plain JSON body with top-level usageMetadata.
+	if tokens, ok := ParseGeminiUsage(body); ok {
+		return tokens, true
+	}
+
+	var (
+		last UsageTokens
+		got  bool
+	)
+
+	// SSE path: walk every `data: ` payload and keep the last successful parse.
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(trimmed[len("data:"):])
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		if tokens, ok := ParseGeminiUsage(payload); ok {
+			last = tokens
+			got = true
+		}
+	}
+	if got {
+		return last, true
+	}
+
+	// NDJSON / `\n\n`-separated path: split on blank lines and try each chunk.
+	for _, chunk := range bytes.Split(body, []byte("\n\n")) {
+		trimmed := bytes.TrimSpace(chunk)
+		if len(trimmed) == 0 {
+			continue
+		}
+		if tokens, ok := ParseGeminiUsage(trimmed); ok {
+			last = tokens
+			got = true
+		}
+	}
+	return last, got
+}
+
+// truncateGeminiFailureBody clips the failure payload so usage.Record.Fail.Body
+// stays bounded. 4 KiB is more than enough for provider error envelopes.
+func truncateGeminiFailureBody(payload []byte) string {
+	const max = 4 * 1024
+	if len(payload) <= max {
+		return string(payload)
+	}
+	return string(payload[:max])
 }
