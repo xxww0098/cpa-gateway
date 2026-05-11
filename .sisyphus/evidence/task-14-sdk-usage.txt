@@ -1,0 +1,62 @@
+Task 14 — sdk/usage.go + sdk/interfaces.go (TDD)
+================================================
+
+Artifacts
+---------
+  sdk/interfaces.go    (BillingLedger + PricingCalculator interfaces)
+  sdk/usage_test.go    (5 tests: mock ledger + mock calculator)
+  sdk/usage.go         (UsagePlugin.HandleUsage reads SettleCtx from ctx)
+
+Acceptance criteria
+-------------------
+[x] sdk/interfaces.go defines BillingLedger + PricingCalculator
+[x] sdk/usage_test.go has 5 tests, all PASS
+[x] go test ./sdk/ -run TestHandleUsage -v PASS (5/5)
+[x] go build ./sdk/ exit 0
+[x] go build ./... exit 0
+[x] go vet ./sdk/ (package non-test sources) clean
+
+Test run
+--------
+Command:
+  $ go test ./sdk/ -run TestHandleUsage -v -count=1
+
+Output:
+  === RUN   TestHandleUsage_SettleSuccess
+  --- PASS: TestHandleUsage_SettleSuccess (0.00s)
+  === RUN   TestHandleUsage_Failed
+  --- PASS: TestHandleUsage_Failed (0.00s)
+  === RUN   TestHandleUsage_WithSubscription
+  --- PASS: TestHandleUsage_WithSubscription (0.00s)
+  === RUN   TestHandleUsage_NoSettleCtx
+  --- PASS: TestHandleUsage_NoSettleCtx (0.00s)
+  === RUN   TestHandleUsage_ZeroTokens
+  --- PASS: TestHandleUsage_ZeroTokens (0.00s)
+  PASS
+  ok      github.com/xxww0098/cpa-gateway/sdk     0.363s
+  Exit: 0
+
+→ 5/5 PASS
+
+Build verification
+------------------
+Command: $ go build ./sdk/      → Exit 0
+Command: $ go build ./...       → Exit 0
+
+Cross-task note
+---------------
+Task 12 (sdk/holdmw.go + sdk/holdmw_test.go) is running in parallel in the
+same Wave 2 and has produced an in-progress sdk/holdmw_test.go with two
+currently-unused imports (io, strings). That file is owned by Task 12 and
+is explicitly out of Task 14's scope per the task prompt:
+  "Do NOT touch sdk/holdmw.go (Task 12 is next in the queue)."
+
+As a result, `go test ./sdk/` (full suite) and `go vet ./sdk/` (which
+includes _test.go) currently fail at compile inside holdmw_test.go. That
+failure belongs to Task 12 and will be resolved when Task 12 finishes.
+Task 14's own acceptance criteria (the -run TestHandleUsage filter,
+`go build ./sdk/`, `go build ./...`) all pass.
+
+Commit
+------
+  feat: add sdk/usage.go (usage.Plugin from ctx SettleCtx) + sdk/interfaces.go
