@@ -1,0 +1,20 @@
+===== make test =====
+go test ./... -count=1 -timeout 30s
+?   	github.com/xxww0098/cpa-gateway	[no test files]
+?   	github.com/xxww0098/cpa-gateway/api	[no test files]
+?   	github.com/xxww0098/cpa-gateway/authutil	[no test files]
+?   	github.com/xxww0098/cpa-gateway/executor	[no test files]
+?   	github.com/xxww0098/cpa-gateway/infra	[no test files]
+ok  	github.com/xxww0098/cpa-gateway/ledger	0.380s
+?   	github.com/xxww0098/cpa-gateway/model	[no test files]
+?   	github.com/xxww0098/cpa-gateway/pricing	[no test files]
+?   	github.com/xxww0098/cpa-gateway/sdk	[no test files]
+?   	github.com/xxww0098/cpa-gateway/testutil	[no test files]
+
+===== EXITCODE: 0 =====
+
+===== go mod tidy =====
+===== EXITCODE: 0 =====
+
+===== grep miniredis go.mod =====
+	github.com/alicebob/miniredis/v2 v2.37.0

@@ -1,0 +1,8 @@
+===== go build -o /tmp/cpa-gw . =====
+===== BUILD EXITCODE: 0 =====
+
+===== go tool nm /tmp/cpa-gw | grep -c miniredis =====
+0
+
+===== Expected: 0 =====
+===== Result: 0 =====

@@ -1,4 +1,4 @@
-.PHONY: build run clean tidy fmt lint test
+.PHONY: build run clean tidy fmt lint test test-verbose test-race
 
 BINARY=cpa-gateway
 PORT=8888
@@ -23,4 +23,10 @@ lint:
 	golangci-lint run
 
 test:
-	go test ./...
+	go test ./... -count=1 -timeout 30s
+
+test-verbose:
+	go test -v ./...
+
+test-race:
+	go test -race ./... -count=1
