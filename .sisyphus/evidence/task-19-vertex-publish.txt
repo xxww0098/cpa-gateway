@@ -1,0 +1,93 @@
+Task 19 — executor/vertex.go 调 usage.PublishRecord
+===================================================
+
+Scope
+-----
+- File modified: executor/vertex.go (ONLY)
+- Pattern mirrored from Task 17 (Gemini), as specified — Vertex's
+  usageMetadata envelope shares the Gemini shape, so ParseVertexUsage
+  is reused directly for both non-stream and streamed responses.
+
+Integration points
+------------------
+1. Execute (non-stream):
+   - Captures requestedAt before the upstream call.
+   - On success/failure, runs ParseVertexUsage(payload) and calls
+     publishUsageFromPayload → cliproxyusage.PublishRecord(ctx, rec).
+   - Failure path preserves the upstreamStatusError return; PublishRecord
+     is still called (Failed=true, Fail.StatusCode=status).
+
+2. ExecuteStream (streaming):
+   - Chunks are forwarded to the client unchanged (no latency added).
+   - Each chunk is simultaneously appended to an in-goroutine buffer and
+     scanned with extractLatestVertexUsage. The scanner handles both
+     SSE-framed `data: {...}` events and concatenated JSON objects,
+     keeping the most recent usageMetadata parse.
+   - If the per-chunk heuristic never succeeds, the aggregated buffer is
+     re-parsed once with ParseVertexUsage as a fallback before publishing.
+   - Publishing happens in a deferred-style finish block after the
+     SSE/JSON stream drains, so streaming remains non-blocking.
+
+3. Errors / context cancellation:
+   - ctx.Err() path marks Failed=true; StatusCode is 0 for cancellations.
+   - Non-EOF upstream read errors also mark Failed=true.
+   - HTTP error responses read before chunking begins publish Failed=true
+     with the concrete status code.
+
+API wiring
+----------
+- Added import: cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+- Added import: "bufio" (used by extractLatestVertexUsage's SSE splitter)
+- Record populated: Provider=providerVertex ("vertex"), Model (via
+  vertexRequestedModel), Alias (from cliproxyusage.RequestedModelAlias
+  FromContext), AuthID (when auth != nil), RequestedAt, Latency,
+  Failed, Fail.StatusCode, Detail.InputTokens / OutputTokens /
+  CachedTokens / ReasoningTokens / TotalTokens.
+- Auth.Type does NOT exist on cliproxy auth.Auth — only AuthID is set
+  per the SDK type definition.
+- Failure uses StatusCode (not Status) per cliproxy usage.Failure type.
+
+Acceptance criteria
+-------------------
+[x] go build ./executor/ exit 0
+[x] go build ./...       exit 0
+[x] go test ./executor/ -run TestParse -v -count=1 PASS (all 9
+    ParseXxxUsage tests still PASS — unchanged)
+[x] executor/vertex.go is the ONLY executor file modified by this task.
+
+Verification commands (executed)
+--------------------------------
+  $ go build ./executor/
+  (exit 0, no output)
+
+  $ go build ./...
+  (exit 0, no output)
+
+  $ go test ./executor/ -run TestParse -v -count=1
+  === RUN   TestParseOpenAIUsage_Full              --- PASS
+  === RUN   TestParseOpenAIUsage_Empty             --- PASS (7 sub-cases)
+  === RUN   TestParseOpenAIUsage_Reasoning         --- PASS
+  === RUN   TestParseClaudeUsage_MessageDelta      --- PASS
+  === RUN   TestParseClaudeUsage_CacheCreation     --- PASS
+  === RUN   TestParseClaudeUsage_Empty             --- PASS (4 sub-cases)
+  === RUN   TestParseGeminiUsage_WithThoughts      --- PASS
+  === RUN   TestParseGeminiUsage_Empty             --- PASS (5 sub-cases)
+  === RUN   TestParseCodexUsage_Body               --- PASS
+  === RUN   TestParseVertexUsage                   --- PASS
+  PASS
+  ok  github.com/xxww0098/cpa-gateway/executor 0.515s
+
+Parallel-task note
+------------------
+Tasks 15/16/17/18 touched executor/openai.go, executor/claude.go,
+executor/gemini.go, executor/codex.go concurrently. During this Task
+19 execution, a parallel Task 17 committed the Gemini integration
+(commit 167a816 "feat: integrate Gemini usage parsing + PublishRecord")
+which superseded the interim Gemini edits seen in the workspace. My
+changes are scoped strictly to executor/vertex.go and the final build
+verification was run against the current tip of main including that
+parallel landing.
+
+Commit
+------
+  feat: integrate Vertex usage parsing + PublishRecord

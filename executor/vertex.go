@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto"
@@ -22,6 +23,7 @@ import (
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 const (
@@ -94,6 +96,7 @@ func NewVertexExecutor(cfg ProviderConfig, timeoutSeconds int) (*VertexExecutor,
 func (e *VertexExecutor) Identifier() string { return providerVertex }
 
 func (e *VertexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	requestedAt := time.Now().UTC()
 	accessToken, baseURL, project, location, err := e.credentialsForRequest(ctx, auth)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -114,12 +117,15 @@ func (e *VertexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		Metadata: map[string]any{"status_code": resp.StatusCode},
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
+		e.publishUsageFromPayload(ctx, auth, req, opts, payload, requestedAt, true, resp.StatusCode)
 		return wrapped, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
+	e.publishUsageFromPayload(ctx, auth, req, opts, payload, requestedAt, false, resp.StatusCode)
 	return wrapped, nil
 }
 
 func (e *VertexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	requestedAt := time.Now().UTC()
 	accessToken, baseURL, project, location, err := e.credentialsForRequest(ctx, auth)
 	if err != nil {
 		return nil, err
@@ -133,6 +139,7 @@ func (e *VertexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(resp.Body)
+		e.publishUsageFromPayload(ctx, auth, req, streamOpts, payload, requestedAt, true, resp.StatusCode)
 		return nil, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 
@@ -141,26 +148,46 @@ func (e *VertexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		defer close(chunks)
 		defer resp.Body.Close()
 
+		var aggregate bytes.Buffer
+		var latestUsage UsageTokens
+		var latestUsageFound bool
 		buf := make([]byte, 32*1024)
+		streamErr := error(nil)
 		for {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
+				aggregate.Write(payload)
+				if tokens, ok := extractLatestVertexUsage(payload); ok {
+					latestUsage = tokens
+					latestUsageFound = true
+				}
 				select {
 				case <-ctx.Done():
 					chunks <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
-					return
+					streamErr = ctx.Err()
+					goto finish
 				case chunks <- cliproxyexecutor.StreamChunk{Payload: payload}:
 				}
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
 					chunks <- cliproxyexecutor.StreamChunk{Err: err}
+					streamErr = err
 				}
-				return
+				break
 			}
 		}
+	finish:
+		if !latestUsageFound {
+			if tokens, ok := ParseVertexUsage(aggregate.Bytes()); ok {
+				latestUsage = tokens
+				latestUsageFound = true
+			}
+		}
+		failed := streamErr != nil
+		e.publishUsageRecord(ctx, auth, req, streamOpts, latestUsage, latestUsageFound, requestedAt, failed, 0)
 	}()
 
 	return &cliproxyexecutor.StreamResult{Headers: resp.Header.Clone(), Chunks: chunks}, nil
@@ -623,4 +650,90 @@ func metadataExpiryValid(values map[string]any, key string, now time.Time) bool 
 		return false
 	}
 	return expiresAt.After(now.Add(vertexRefreshSkew))
+}
+
+// publishUsageFromPayload parses a full (non-stream) Vertex response body and
+// publishes a usage.Record. ParseVertexUsage mirrors the Gemini usageMetadata
+// envelope, so a single call handles Vertex's non-stream JSON as well as the
+// concatenated chunks that fell through the stream heuristics.
+func (e *VertexExecutor) publishUsageFromPayload(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, payload []byte, requestedAt time.Time, failed bool, statusCode int) {
+	tokens, ok := ParseVertexUsage(payload)
+	e.publishUsageRecord(ctx, auth, req, opts, tokens, ok, requestedAt, failed, statusCode)
+}
+
+// publishUsageRecord assembles a usage.Record with the provider identifier,
+// model, optional auth identifiers, and token breakdown, and hands it to the
+// SDK default manager via cliproxyusage.PublishRecord.
+//
+// Publishing is fire-and-forget: the plugin layer (sdk/usage.go) reads the
+// SettleCtx off ctx to decide whether to settle, so a missing ctx value just
+// means the record is dropped by the plugin.
+func (e *VertexExecutor) publishUsageRecord(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, tokens UsageTokens, hasTokens bool, requestedAt time.Time, failed bool, statusCode int) {
+	rec := cliproxyusage.Record{
+		Provider:    providerVertex,
+		Model:       vertexRequestedModel(req, opts),
+		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
+		RequestedAt: requestedAt,
+		Latency:     time.Since(requestedAt),
+		Failed:      failed,
+	}
+	if auth != nil {
+		rec.AuthID = auth.ID
+	}
+	if hasTokens {
+		rec.Detail = cliproxyusage.Detail{
+			InputTokens:     tokens.Input,
+			OutputTokens:    tokens.Output,
+			CachedTokens:    tokens.Cached,
+			ReasoningTokens: tokens.Reasoning,
+			TotalTokens:     tokens.Input + tokens.Output + tokens.Cached + tokens.Reasoning,
+		}
+	}
+	if failed && statusCode > 0 {
+		rec.Fail = cliproxyusage.Failure{StatusCode: statusCode}
+	}
+	cliproxyusage.PublishRecord(ctx, rec)
+}
+
+// extractLatestVertexUsage scans a streamed Vertex chunk — which can be an SSE
+// frame (`data: {...}`) or a concatenated slice of a JSON array — and returns
+// the latest usageMetadata found inside it. Returns (UsageTokens{}, false) if
+// no usage shape is parsed.
+//
+// We intentionally look for every "{...}" JSON object boundary rather than
+// requiring a framed event: Vertex clients sometimes receive non-SSE
+// chunked-JSON, and the stream may split across Read calls.
+func extractLatestVertexUsage(chunk []byte) (UsageTokens, bool) {
+	if len(bytes.TrimSpace(chunk)) == 0 {
+		return UsageTokens{}, false
+	}
+	var latest UsageTokens
+	var found bool
+
+	// Fast path: whole chunk is itself a JSON object with usageMetadata.
+	if tokens, ok := ParseVertexUsage(chunk); ok {
+		latest = tokens
+		found = true
+	}
+
+	// SSE frames: extract every `data: ...` payload.
+	scanner := bufio.NewScanner(bytes.NewReader(chunk))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			line = bytes.TrimSpace(line[len("data:"):])
+		}
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		if tokens, ok := ParseVertexUsage(line); ok {
+			latest = tokens
+			found = true
+		}
+	}
+	return latest, found
 }
