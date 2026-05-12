@@ -1,3 +1,9 @@
+=== Task 12: sdk/holdmw.go — HoldMiddleware ===
+
+Implementation: sdk/holdmw.go (committed in f9adcf2)
+Test file:      sdk/holdmw_test.go (6 tests)
+
+---HOLD_TESTS (go test ./sdk/ -run TestHold -v -count=1)---
 === RUN   TestHold_SufficientBalance
 --- PASS: TestHold_SufficientBalance (0.00s)
 === RUN   TestHold_InsufficientBalance
@@ -11,9 +17,15 @@
 === RUN   TestHold_NonV1Path
 --- PASS: TestHold_NonV1Path (0.00s)
 PASS
-ok  	github.com/xxww0098/cpa-gateway/sdk	0.373s
----BUILD---
----FULL_SDK_TESTS---
+ok  	github.com/xxww0098/cpa-gateway/sdk	0.435s
+
+---BUILD (go build ./...)---
+(exit 0, no output)
+
+---VET (go vet ./sdk/)---
+(exit 0, no output)
+
+---FULL_SDK_TESTS (go test ./sdk/ -v -count=1)---
 === RUN   TestAuthenticate_APIKey
 --- PASS: TestAuthenticate_APIKey (0.00s)
 === RUN   TestAuthenticate_JWT
@@ -47,4 +59,11 @@ ok  	github.com/xxww0098/cpa-gateway/sdk	0.373s
 === RUN   TestHandleUsage_ZeroTokens
 --- PASS: TestHandleUsage_ZeroTokens (0.00s)
 PASS
-ok  	github.com/xxww0098/cpa-gateway/sdk	0.376s
+ok  	github.com/xxww0098/cpa-gateway/sdk	0.383s
+
+---ACCEPTANCE CRITERIA---
+[x] sdk/holdmw_test.go has 6 tests (≥5 required), all PASS
+[x] go test ./sdk/ -run TestHold -v PASS
+[x] Subscription quota reset covered (TestHold_SubscriptionQuotaReset exercises daily reset path)
+[x] go build ./... exit 0
+[x] go vet ./sdk/ exit 0
