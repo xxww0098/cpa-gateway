@@ -15,6 +15,7 @@ import (
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 const (
@@ -81,6 +82,7 @@ func (e *CodexExecutor) Identifier() string { return providerCodex }
 
 func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	accessToken, baseURL := e.resolveCredentials(auth)
+	startedAt := time.Now().UTC()
 	resp, err := e.doChatCompletionsRequest(ctx, req, opts, accessToken, baseURL)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -98,7 +100,13 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			"status_code": resp.StatusCode,
 		},
 	}
-	if resp.StatusCode >= http.StatusBadRequest {
+	failed := resp.StatusCode >= http.StatusBadRequest
+	tokens, ok := ParseCodexUsage(payload)
+	if ok {
+		wrapped.Metadata["usage"] = tokens
+	}
+	e.publishUsage(ctx, auth, tokens, ok, failed, resp.StatusCode, payload, startedAt)
+	if failed {
 		return wrapped, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 	return wrapped, nil
@@ -108,6 +116,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	accessToken, baseURL := e.resolveCredentials(auth)
 	streamOpts := opts
 	streamOpts.Stream = true
+	startedAt := time.Now().UTC()
 	resp, err := e.doChatCompletionsRequest(ctx, req, streamOpts, accessToken, baseURL)
 	if err != nil {
 		return nil, err
@@ -115,6 +124,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(resp.Body)
+		e.publishUsage(ctx, auth, UsageTokens{}, false, true, resp.StatusCode, payload, startedAt)
 		return nil, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 
@@ -123,23 +133,30 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		defer close(chunks)
 		defer resp.Body.Close()
 
+		var accumulator bytes.Buffer
+		var streamErr error
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
+				accumulator.Write(payload)
 				select {
 				case <-ctx.Done():
-					chunks <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
+					streamErr = ctx.Err()
+					chunks <- cliproxyexecutor.StreamChunk{Err: streamErr}
+					e.publishStreamUsage(ctx, auth, accumulator.Bytes(), true, 0, startedAt)
 					return
 				case chunks <- cliproxyexecutor.StreamChunk{Payload: payload}:
 				}
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
+					streamErr = err
 					chunks <- cliproxyexecutor.StreamChunk{Err: err}
 				}
+				e.publishStreamUsage(ctx, auth, accumulator.Bytes(), streamErr != nil, resp.StatusCode, startedAt)
 				return
 			}
 		}
@@ -415,4 +432,103 @@ func (e *CodexExecutor) chatCompletionsEndpoint(query url.Values, baseURL string
 		parsed.RawQuery = values.Encode()
 	}
 	return parsed.String(), nil
+}
+
+// publishUsage emits a usage.Record to the SDK default manager. Codex surfaces
+// usage through the OpenAI-compatible `usage` field, so the body is parsed
+// by ParseCodexUsage (which delegates to ParseOpenAIUsage). When parsing
+// fails the record is still published with zero Detail — downstream
+// UsagePlugin can then fall back to heuristic accounting.
+func (e *CodexExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+	rec := cliproxyusage.Record{
+		Provider:    providerCodex,
+		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
+		Source:      providerCodex,
+		RequestedAt: startedAt,
+		Latency:     time.Since(startedAt),
+		Failed:      failed,
+	}
+	if auth != nil {
+		rec.AuthID = auth.ID
+		rec.AuthIndex = auth.Index
+		rec.AuthType = auth.Provider
+	}
+	if parsed {
+		rec.Detail = cliproxyusage.Detail{
+			InputTokens:     tokens.Input,
+			OutputTokens:    tokens.Output,
+			ReasoningTokens: tokens.Reasoning,
+			CachedTokens:    tokens.Cached,
+			TotalTokens:     tokens.Input + tokens.Output,
+		}
+	}
+	if failed {
+		rec.Fail = cliproxyusage.Failure{
+			StatusCode: status,
+			Body:       truncateCodexFailureBody(payload),
+		}
+	}
+	cliproxyusage.PublishRecord(ctx, rec)
+}
+
+// publishStreamUsage parses the accumulated SSE body and delegates to
+// publishUsage. Codex streams OpenAI-compatible chunks, and the terminal
+// non-`[DONE]` data JSON event carries the aggregate `usage` envelope. The
+// ParseCodexUsage/ParseOpenAIUsage path tolerates SSE framing: json.Unmarshal
+// on the full buffer will simply fail and return (zero, false) which is the
+// contract publishUsage expects.
+func (e *CodexExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, body []byte, failed bool, status int, startedAt time.Time) {
+	tokens, ok := UsageTokens{}, false
+	if len(body) > 0 {
+		tokens, ok = parseCodexSSEUsage(body)
+	}
+	e.publishUsage(ctx, auth, tokens, ok, failed, status, nil, startedAt)
+}
+
+// parseCodexSSEUsage scans an OpenAI-style SSE buffer for the last
+// `data: {...}` event that carries a non-nil `usage` envelope. The stream
+// format is:
+//
+//	data: {"choices":[...]}\n\n
+//	data: {"choices":[...],"usage":{...}}\n\n
+//	data: [DONE]\n\n
+//
+// Only the final usage-bearing JSON event matters; earlier deltas either
+// omit usage entirely or carry partial counts. Falls back to parsing the
+// whole buffer (non-stream path) when no SSE framing is detected.
+func parseCodexSSEUsage(body []byte) (UsageTokens, bool) {
+	// Fast path: plain JSON body with top-level usage.
+	if tokens, ok := ParseCodexUsage(body); ok {
+		return tokens, true
+	}
+	// SSE path: walk every `data: ` payload and keep the last successful parse.
+	var (
+		last UsageTokens
+		got  bool
+	)
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(trimmed[len("data:"):])
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		if tokens, ok := ParseCodexUsage(payload); ok {
+			last = tokens
+			got = true
+		}
+	}
+	return last, got
+}
+
+// truncateCodexFailureBody clips the failure payload so usage.Record.Fail.Body
+// stays bounded. 4 KiB is more than enough for provider error envelopes.
+func truncateCodexFailureBody(payload []byte) string {
+	const max = 4 * 1024
+	if len(payload) <= max {
+		return string(payload)
+	}
+	return string(payload[:max])
 }

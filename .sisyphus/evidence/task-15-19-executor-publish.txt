@@ -1,0 +1,170 @@
+Tasks 15-19 — executor/*.go usage.PublishRecord integration (consolidated)
+==========================================================================
+
+Scope
+-----
+Ensure every provider executor (OpenAI, Claude, Gemini, Codex, Vertex)
+parses upstream usage and calls cliproxyusage.PublishRecord on both
+Execute (non-stream) and ExecuteStream code paths. The published
+Record is routed by the SDK default usage manager to the registered
+UsagePlugin (sdk/usage.go), which reads SettleCtx off ctx to decide
+whether to settle/release.
+
+Prior state
+-----------
+Tasks 15-19 were landed in earlier Wave 3 batches (see
+task-15-openai-publish.txt … task-19-vertex-publish.txt). On a fresh
+read of the tree during this run:
+
+- executor/openai.go : publishUsage + publishStreamUsage wired in
+  Execute + ExecuteStream + pre-stream 4xx/5xx.  [OK]
+- executor/claude.go : publishUsage + publishStreamUsage wired in
+  Execute + ExecuteStream + pre-stream 4xx/5xx.  [OK]
+- executor/codex.go  : publishUsage + publishStreamUsage wired in
+  Execute + ExecuteStream + pre-stream 4xx/5xx.  [OK]
+- executor/vertex.go : publishUsageFromPayload + publishUsageRecord
+  wired in Execute + ExecuteStream.             [OK]
+- executor/gemini.go : publishUsage + publishStreamUsage DEFINED
+  but Execute + ExecuteStream did NOT invoke them. [GAP]
+
+This run closes the remaining Gemini gap without touching the other
+four (which already had verified integrations per their evidence
+files).
+
+Gemini gap fix (this run)
+-------------------------
+File modified: executor/gemini.go  (ONLY this one)
+
+Execute:
+  + capture `startedAt := time.Now().UTC()` on entry
+  + after io.ReadAll → `tokens, ok := ParseGeminiUsage(payload)`
+  + stash parsed tokens on Response.Metadata["usage"] (back-compat)
+  + call `e.publishUsage(ctx, auth, req, opts, tokens, ok, failed,
+    resp.StatusCode, payload, startedAt)` BEFORE returning, covering
+    success and 4xx/5xx paths.
+
+ExecuteStream:
+  + capture `startedAt`
+  + pre-stream 4xx/5xx: publish Failed=true + Fail.StatusCode before
+    returning upstreamStatusError.
+  + streaming goroutine: accumulate raw SSE/NDJSON body into a
+    bytes.Buffer; on ctx cancel / read error / EOF call
+    `e.publishStreamUsage(ctx, auth, req, streamOpts,
+     accumulator.Bytes(), failed, resp.StatusCode, startedAt)`.
+
+Helper signatures updated to accept `req, opts`:
+  publishUsage(ctx, auth, req, opts, tokens, parsed, failed, status,
+               payload, startedAt)
+  publishStreamUsage(ctx, auth, req, opts, body, failed, status,
+                     startedAt)
+
+This allows Record.Model = geminiRequestedModel(req, opts), matching
+the OpenAI/Claude pattern. Without it the Record had no Model field
+populated, which would have caused downstream UsagePlugin price lookup
+to fail the .
+
+Record field population (all 5 executors)
+-----------------------------------------
+  Provider    = provider constant
+                 ("openai" / "claude" / "gemini" / "codex" / "vertex")
+  Model       = <provider>RequestedModel(req, opts)
+                 (vertex strips "vertex/" prefix; falls back to
+                  cliproxyexecutor.RequestedModelMetadataKey)
+  Alias       = cliproxyusage.RequestedModelAliasFromContext(ctx)
+  Source      = provider constant
+  RequestedAt = startedAt
+  Latency     = time.Since(startedAt)
+  Failed      = statusCode >= 400 || streamErr != nil
+  AuthID      = auth.ID           (when auth != nil)
+  AuthIndex   = auth.Index        (vertex skipped — intentional)
+  AuthType    = auth.Provider     (vertex skipped — intentional)
+  Detail      = {
+    InputTokens     = UsageTokens.Input,
+    OutputTokens    = UsageTokens.Output,
+    ReasoningTokens = UsageTokens.Reasoning,
+    CachedTokens    = UsageTokens.Cached,
+    TotalTokens     = Input + Output,
+  }
+  Fail = { StatusCode, Body (4 KiB truncated) }  — when failed only
+
+Provider-specific parsing strategies (confirmed)
+------------------------------------------------
+- OpenAI: body .usage  + SSE: last `data: {...}` event carrying usage.
+  completion_tokens_details.reasoning_tokens → Reasoning.
+  prompt_tokens_details.cached_tokens        → Cached.
+- Claude: message_start.message.usage.input_tokens +
+           message_delta.delta.usage.output_tokens merged via max();
+           cache_creation_input_tokens + cache_read_input_tokens →
+           Cached.
+- Gemini: usageMetadata{promptTokenCount, candidatesTokenCount,
+           thoughtsTokenCount, cachedContentTokenCount}.
+           Stream: SSE `data: {json}` OR `\n\n`-separated JSON
+           chunks; keeps last usage-bearing parse.
+- Codex: delegates to ParseOpenAIUsage on body and SSE events.
+- Vertex: mirrors Gemini usageMetadata shape; chunk-by-chunk
+           extractLatestVertexUsage handles SSE + concatenated JSON;
+           aggregate ParseVertexUsage as final fallback.
+
+Must-NOT-do compliance (all 5 files)
+------------------------------------
+- No changes to HTTP transport semantics, endpoints, headers, body
+  lifecycle.
+- No blocking added to streams: chunks flow through the channel
+  exactly as before; publishing is fire-and-forget after
+  `defer close(chunks)` fires.
+- No request_id keyed UsageCollector introduced. PublishRecord
+  routes via ctx; sdk/usage.go reads SettleCtx off ctx.
+- Response.Metadata["usage"] still populated on non-stream paths for
+  back-compat with non-SDK callers.
+- Identifier(), CountTokens, Refresh, HttpRequest, resolveCredentials,
+  and endpoint builders unchanged.
+
+Acceptance criteria
+-------------------
+[x] PublishRecord invoked in both Execute + ExecuteStream for each
+    of the 5 executors.
+[x] `go build ./...` exit 0
+[x] `go vet ./...`   exit 0
+[x] `go test ./executor/ -count=1` PASS
+[x] `grep -l PublishRecord executor/` shows all 5 files (via
+     `grep -rln ... executor/`)
+
+Verification commands (this run)
+--------------------------------
+  $ go build ./...
+    (exit 0)
+
+  $ go vet ./...
+    (exit 0)
+
+  $ go test ./executor/ -count=1
+    ok  github.com/xxww0098/cpa-gateway/executor  0.590s
+
+  $ grep -rln "cliproxyusage.PublishRecord" executor/
+    executor/codex.go
+    executor/vertex.go
+    executor/gemini.go
+    executor/claude.go
+    executor/openai.go
+    (all 5 files present ✓)
+
+  $ for f in openai claude gemini codex vertex; do
+      echo "=== $f ==="
+      grep -c \
+        "publishUsage\|PublishRecord\|publishStreamUsage\|\
+publishUsageFromPayload\|publishUsageRecord" \
+        executor/$f.go
+    done
+    === openai ===  11
+    === claude ===  11
+    === gemini ===  11
+    === codex ===   12
+    === vertex ===  11
+
+Commits
+-------
+- Tasks 15-18 (OpenAI / Claude / Codex / Vertex) landed on earlier
+  Wave 3 commits (see individual evidence files for hashes).
+- This run's single commit:
+    "feat: wire Gemini Execute/ExecuteStream to publishUsage
+     (complete task 17)"

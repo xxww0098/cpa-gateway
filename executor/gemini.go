@@ -62,6 +62,7 @@ func (e *GeminiExecutor) Identifier() string { return providerGemini }
 
 func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := e.resolveCredentials(auth)
+	startedAt := time.Now().UTC()
 	resp, err := e.doGenerateContentRequest(ctx, req, opts, apiKey, baseURL, false)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -77,7 +78,13 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		Headers: resp.Header.Clone(),
 		Metadata: map[string]any{"status_code": resp.StatusCode},
 	}
-	if resp.StatusCode >= http.StatusBadRequest {
+	failed := resp.StatusCode >= http.StatusBadRequest
+	tokens, ok := ParseGeminiUsage(payload)
+	if ok {
+		wrapped.Metadata["usage"] = tokens
+	}
+	e.publishUsage(ctx, auth, req, opts, tokens, ok, failed, resp.StatusCode, payload, startedAt)
+	if failed {
 		return wrapped, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 	return wrapped, nil
@@ -87,6 +94,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	apiKey, baseURL := e.resolveCredentials(auth)
 	streamOpts := opts
 	streamOpts.Stream = true
+	startedAt := time.Now().UTC()
 	resp, err := e.doGenerateContentRequest(ctx, req, streamOpts, apiKey, baseURL, true)
 	if err != nil {
 		return nil, err
@@ -94,6 +102,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(resp.Body)
+		e.publishUsage(ctx, auth, req, streamOpts, UsageTokens{}, false, true, resp.StatusCode, payload, startedAt)
 		return nil, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 
@@ -102,23 +111,30 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		defer close(chunks)
 		defer resp.Body.Close()
 
+		var accumulator bytes.Buffer
+		var streamErr error
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
+				accumulator.Write(payload)
 				select {
 				case <-ctx.Done():
-					chunks <- cliproxyexecutor.StreamChunk{Err: ctx.Err()}
+					streamErr = ctx.Err()
+					chunks <- cliproxyexecutor.StreamChunk{Err: streamErr}
+					e.publishStreamUsage(ctx, auth, req, streamOpts, accumulator.Bytes(), true, 0, startedAt)
 					return
 				case chunks <- cliproxyexecutor.StreamChunk{Payload: payload}:
 				}
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
+					streamErr = err
 					chunks <- cliproxyexecutor.StreamChunk{Err: err}
 				}
+				e.publishStreamUsage(ctx, auth, req, streamOpts, accumulator.Bytes(), streamErr != nil, resp.StatusCode, startedAt)
 				return
 			}
 		}
@@ -270,9 +286,10 @@ func geminiRequestedModel(req cliproxyexecutor.Request, opts cliproxyexecutor.Op
 // Output, thoughtsTokenCount → Reasoning, and cachedContentTokenCount →
 // Cached. When parsing fails the record is still published with zero Detail so
 // downstream UsagePlugin can fall back to heuristic accounting.
-func (e *GeminiExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+func (e *GeminiExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
 	rec := cliproxyusage.Record{
 		Provider:    providerGemini,
+		Model:       geminiRequestedModel(req, opts),
 		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
 		Source:      providerGemini,
 		RequestedAt: startedAt,
@@ -307,12 +324,12 @@ func (e *GeminiExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Au
 // {json}` events (when `alt=sse` is set, as this executor does) or newline-
 // separated JSON chunks. The final chunk carries the aggregate `usageMetadata`
 // envelope, so we scan all events and keep the last successful parse.
-func (e *GeminiExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, body []byte, failed bool, status int, startedAt time.Time) {
+func (e *GeminiExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, body []byte, failed bool, status int, startedAt time.Time) {
 	tokens, ok := UsageTokens{}, false
 	if len(body) > 0 {
 		tokens, ok = parseGeminiStreamUsage(body)
 	}
-	e.publishUsage(ctx, auth, tokens, ok, failed, status, nil, startedAt)
+	e.publishUsage(ctx, auth, req, opts, tokens, ok, failed, status, nil, startedAt)
 }
 
 // parseGeminiStreamUsage scans a streamGenerateContent response body for the
