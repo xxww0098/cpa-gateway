@@ -1,25 +1,24 @@
 import { useState, useEffect } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import { toast } from 'sonner'
-import { updateUser } from '../api'
+import { useUpdateUser } from '../hooks'
 import type { UserItem } from '../types'
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   user: UserItem | null
-  onSuccess?: () => void
 }
 
-export function AdminUserEditDialog({ open, onOpenChange, user, onSuccess }: Props) {
+export function AdminUserEditDialog({ open, onOpenChange, user }: Props) {
   const [role, setRole] = useState('user')
   const [balance, setBalance] = useState('')
   const [concurrency, setConcurrency] = useState('')
   const [username, setUsername] = useState('')
   const [status, setStatus] = useState('active')
   const [password, setPassword] = useState('')
-  const [saving, setSaving] = useState(false)
+
+  const updateUser = useUpdateUser()
 
   useEffect(() => {
     if (user && open) {
@@ -34,25 +33,16 @@ export function AdminUserEditDialog({ open, onOpenChange, user, onSuccess }: Pro
 
   const handleSave = async () => {
     if (!user) return
-    setSaving(true)
-    try {
-      const payload = {
-        role,
-        balance: parseFloat(balance),
-        concurrency: parseInt(concurrency) || 5,
-        status,
-        username: username || null,
-      }
-      if (password) (payload as Record<string, unknown>).password = password
-      await updateUser(user.id, payload)
-      toast.success('用户信息已更新')
-      onOpenChange(false)
-      onSuccess?.()
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : '保存失败')
-    } finally {
-      setSaving(false)
+    const payload = {
+      role,
+      balance: parseFloat(balance),
+      concurrency: parseInt(concurrency) || 5,
+      status,
+      username: username || null,
+      password: password || undefined,
     }
+    await updateUser.mutateAsync({ id: user.id, payload })
+    onOpenChange(false)
   }
 
   return (
@@ -113,8 +103,8 @@ export function AdminUserEditDialog({ open, onOpenChange, user, onSuccess }: Pro
             <DialogPrimitive.Close asChild>
               <button className="btn btn-ghost px-4 text-sm">取消</button>
             </DialogPrimitive.Close>
-            <button className="btn btn-primary px-5 text-sm" onClick={handleSave} disabled={saving}>
-              {saving ? '保存中...' : '保存变更'}
+            <button className="btn btn-primary px-5 text-sm" onClick={handleSave} disabled={updateUser.isPending}>
+              {updateUser.isPending ? '保存中...' : '保存变更'}
             </button>
           </div>
           <DialogPrimitive.Close className="absolute right-4 top-4 rounded-md p-1 opacity-70 hover:opacity-100 transition-opacity">

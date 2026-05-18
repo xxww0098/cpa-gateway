@@ -48,6 +48,18 @@ export interface CreateKeyForm {
   expires_in_days?: number | null
 }
 
+/** Payload sent to POST /user/api-keys */
+export interface CreateKeyPayload {
+  name: string
+  quota?: number
+  rate_limit_5h?: number
+  rate_limit_1d?: number
+  rate_limit_7d?: number
+  rate_limit_30d?: number
+  group_id?: number
+  expires_in_days?: number | null
+}
+
 export interface AvailableGroup {
   id: number
   name: string

@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { Plus, X, ChevronDown } from "lucide-react"
-import { fetchApi } from "@/shared/api/client"
 import type { CreateKeyForm, AvailableGroup } from "../types"
 
 interface Props {
   onCreate: (form: CreateKeyForm, onSuccess: () => void) => Promise<void>
+  groups: AvailableGroup[]
+  groupsLoading: boolean
 }
 
 const EXPIRATION_PRESETS = [
@@ -14,7 +15,7 @@ const EXPIRATION_PRESETS = [
   { label: "90 天", days: 90 },
 ] as const
 
-export function CreateApiKeyDialog({ onCreate }: Props) {
+export function CreateApiKeyDialog({ onCreate, groups, groupsLoading }: Props) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
   const [quota, setQuota] = useState("")
@@ -25,32 +26,12 @@ export function CreateApiKeyDialog({ onCreate }: Props) {
   const [creating, setCreating] = useState(false)
 
   // Group selector state
-  const [groups, setGroups] = useState<AvailableGroup[]>([])
   const [selectedGroupId, setSelectedGroupId] = useState<string>("")
-  const [groupsLoading, setGroupsLoading] = useState(false)
 
   // Expiration picker state
   const [expirationMode, setExpirationMode] = useState<"preset" | "custom" | "permanent">("permanent")
   const [selectedPresetDays, setSelectedPresetDays] = useState<number | null>(null)
   const [customDays, setCustomDays] = useState("")
-
-  // Fetch available groups when dialog opens
-  useEffect(() => {
-    if (!open) return
-    setGroupsLoading(true)
-    fetchApi("/user/available-groups")
-      .then((res) => {
-        const data = res?.data ?? res
-        if (Array.isArray(data)) {
-          setGroups(data as AvailableGroup[])
-        }
-      })
-      .catch(() => {
-        // Silently fail — group selection is optional
-        setGroups([])
-      })
-      .finally(() => setGroupsLoading(false))
-  }, [open])
 
   const resetForm = () => {
     setName("")
@@ -75,7 +56,7 @@ export function CreateApiKeyDialog({ onCreate }: Props) {
     return undefined
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: { preventDefault: () => void }) => {
     e.preventDefault()
     setCreating(true)
     const form: CreateKeyForm = {

@@ -1,38 +1,31 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { useAuthStore } from '@/features/auth/auth_store'
-import { fetchApi } from '@/shared/api/client'
+import { useLogin } from '@/features/auth/hooks'
+import { errorMessage } from '@/shared/api/errors'
 import { Mail, Lock, ArrowRight, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const setAuth = useAuthStore(state => state.setAuth)
   const navigate = useNavigate()
+  const loginMutation = useLogin()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
     setError('')
-    try {
-      const res = await fetchApi('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password })
-      })
-      if (res.code === 0 && res.data) {
-        setAuth(res.data.token, res.data.user)
-        navigate('/dashboard')
-      } else {
-        setError(res.message || '登录失败')
+    loginMutation.mutate(
+      { email, password },
+      {
+        onSuccess: () => {
+          navigate('/dashboard')
+        },
+        onError: (err) => {
+          setError(errorMessage(err, '登录失败'))
+        },
       }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '请求异常')
-    } finally {
-      setLoading(false)
-    }
+    )
   }
 
   return (
@@ -96,10 +89,10 @@ export default function Login() {
 
         <button 
           type="submit" 
-          disabled={loading || !email || !password}
+          disabled={loginMutation.isPending || !email || !password}
           className="btn btn-primary w-full mt-2"
         >
-          {loading ? (
+          {loginMutation.isPending ? (
             <><Loader2 className="w-5 h-5 animate-spin mr-2" /> 验证中...</>
           ) : (
             <>登录系统 <ArrowRight className="w-4 h-4 ml-1" /></>

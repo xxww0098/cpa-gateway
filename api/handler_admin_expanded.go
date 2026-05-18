@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,6 +80,8 @@ func (pr *PanelRouter) AdminUsersCreateHandler(c *gin.Context) {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create user")
 		return
 	}
+	actor, _ := pr.requireBillingCtx(c)
+	pr.recordOperation(c, actor, "admin.user.create", "user:"+strconv.FormatUint(uint64(u.ID), 10), http.StatusOK, map[string]any{"email": u.Email, "role": u.Role})
 	Success(c, adminUserPayload(u))
 }
 
@@ -105,6 +108,7 @@ func (pr *PanelRouter) AdminUsersUpdateHandler(c *gin.Context) {
 	u.Role = firstNonEmpty(req.Role, u.Role, "user")
 	u.Balance = req.Balance
 	u.Concurrency = req.Concurrency
+	previousStatus := u.Status
 	u.Status = firstNonEmpty(req.Status, u.Status, userStatusActive)
 	if req.Username != nil {
 		u.Username = strings.TrimSpace(*req.Username)
@@ -121,6 +125,17 @@ func (pr *PanelRouter) AdminUsersUpdateHandler(c *gin.Context) {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to update user")
 		return
 	}
+	// If the admin flipped the user's status away from "active" (suspend /
+	// disable / deleted via generic update path), flush caches AFTER the
+	// commit so subsequent auth attempts re-read the DB. The equivalent of
+	// the AdminUsersDeleteHandler hook, kept here for any admin route that
+	// mutates User.Status. A no-op when the status did not change or when
+	// the new status is still active.
+	if previousStatus != u.Status && u.Status != userStatusActive {
+		pr.invalidateUserCaches(c.Request.Context(), u.ID)
+	}
+	actor, _ := pr.requireBillingCtx(c)
+	pr.recordOperation(c, actor, "admin.user.update", "user:"+strconv.FormatUint(uint64(u.ID), 10), http.StatusOK, map[string]any{"status": u.Status, "role": u.Role, "previous_status": previousStatus})
 	Success(c, adminUserPayload(u))
 }
 
@@ -137,6 +152,14 @@ func (pr *PanelRouter) AdminUsersDeleteHandler(c *gin.Context) {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to delete user")
 		return
 	}
+	// Flush UserStatusCache + APIKeyCache AFTER the status=deleted commit so
+	// subsequent /v1/* and /api/panel/** requests that arrive via a stale
+	// cached "active" entry re-read the DB and reject the credential. Failure
+	// path above returns early, preserving atomicity (no cache flush on DB
+	// failure — the DB row is still "active").
+	pr.invalidateUserCaches(c.Request.Context(), id)
+	actor, _ := pr.requireBillingCtx(c)
+	pr.recordOperation(c, actor, "admin.user.delete", "user:"+strconv.FormatUint(uint64(id), 10), http.StatusOK, nil)
 	Success(c, gin.H{"deleted": true})
 }
 
@@ -166,6 +189,8 @@ func (pr *PanelRouter) AdminUsersDepositHandler(c *gin.Context) {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to deposit balance")
 		return
 	}
+	actor, _ := pr.requireBillingCtx(c)
+	pr.recordOperation(c, actor, "admin.user.deposit", "user:"+strconv.FormatUint(uint64(u.ID), 10), http.StatusOK, map[string]any{"amount": req.Amount, "note": strings.TrimSpace(req.Note)})
 	Success(c, gin.H{"ok": true})
 }
 

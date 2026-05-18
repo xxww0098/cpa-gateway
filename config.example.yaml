@@ -16,7 +16,6 @@ redis:
   db: 0
 
 auth:
-  admin_emails: []
   jwt:
     secret: ""
     expiry_hours: 24
@@ -57,3 +56,12 @@ billing:
   hold_amount: 100
   default_price_per_1k_tokens: 0.001
   hold_ttl_seconds: 3600
+  # strict_usage_metadata_mode controls how billing settles a successful
+  # upstream response when the provider's usage metadata envelope is missing
+  # (e.g. OpenAI streaming response without a terminal `usage` event).
+  #   false (default): conservative fallback — settle at least the
+  #     Active_Hold_Amount so tenants cannot obtain free upstream output.
+  #   true: strict mode — do NOT settle or release; leave the Hold in place
+  #     until it expires via TTL (or out-of-band reconciliation), and write
+  #     a UsageLog row with Failed=true for operator follow-up.
+  strict_usage_metadata_mode: false

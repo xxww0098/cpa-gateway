@@ -1,7 +1,7 @@
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import {
   RefreshCw, Plus, Trash2, Search,
-  Gauge, ChevronDown, Pause, Play
+  Gauge, ChevronDown, Pause, Play, Download
 } from 'lucide-react'
 import { providerBadgeColor } from '../authFileViewUtils'
 import type { AuthFileToolbarProps, SmartView } from '../types'
@@ -26,9 +26,11 @@ export function AuthFileToolbar({
   selectedPausableCount,
   selectedResumableCount,
   batchStatusLoading,
+  exportLoading,
   onBatchPause,
   onBatchResume,
   onBatchDelete,
+  onBatchExport,
   onRefresh,
   refreshing,
   onUpload,
@@ -111,6 +113,14 @@ export function AuthFileToolbar({
               >
                 <Play className="h-3 w-3" />
                 恢复调度 {selectedResumableCount > 0 ? selectedResumableCount : ''}
+              </button>
+              <button
+                onClick={onBatchExport}
+                disabled={exportLoading}
+                className="inline-flex h-7 items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2 text-[11px] font-medium text-indigo-700 shadow-sm transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-indigo-900/60 dark:bg-dark-900 dark:text-indigo-300 dark:hover:bg-indigo-950/30"
+              >
+                <Download className={`h-3 w-3 ${exportLoading ? 'animate-pulse' : ''}`} />
+                {exportLoading ? '导出中…' : '导出 zip'}
               </button>
               <button
                 onClick={onBatchDelete}

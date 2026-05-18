@@ -11,7 +11,7 @@ import {
 } from '@/shared/components/ui/dialog'
 import { Loader2, RefreshCcw, Plus, Trash2, Globe, Search, Pencil, Activity } from 'lucide-react'
 import { toast } from 'sonner'
-import { fetchMgmtApi } from '../api'
+import { fetchProviderConfig, updateProviderConfig, fetchApiKeyUsage } from '../api'
 import { Input } from '@/shared/components/ui/input'
 import { Textarea } from '@/shared/components/ui/textarea'
 import { Switch } from '@/shared/components/ui/switch'
@@ -73,10 +73,10 @@ export function ProviderTab({ providerKind, endpoint, refreshSignal, onOpenModel
     if (!silent) setLoading(true)
     try {
       const [data, usage] = await Promise.all([
-        fetchMgmtApi(endpoint),
-        fetchMgmtApi('/api-key-usage').catch(() => undefined as ApiKeyUsageResponse | undefined),
+        fetchProviderConfig(endpoint),
+        fetchApiKeyUsage<ApiKeyUsageResponse>().catch(() => undefined),
       ])
-      setItems(normalizeProviderItems(providerKind, data, usage as ApiKeyUsageResponse | undefined))
+      setItems(normalizeProviderItems(providerKind, data, usage))
     } catch (e: unknown) {
       toast.error(`获取 ${provider} 数据失败: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -102,9 +102,9 @@ export function ProviderTab({ providerKind, endpoint, refreshSignal, onOpenModel
 
   const handleAdd = async () => {
     try {
-      const latest = await fetchMgmtApi(endpoint)
+      const latest = await fetchProviderConfig(endpoint)
       const updatedArray = buildProviderAddArray(providerKind, latest, newForm)
-      await fetchMgmtApi(endpoint, { method: 'PUT', body: JSON.stringify(updatedArray) })
+      await updateProviderConfig(endpoint, updatedArray)
       toast.success('添加成功')
       setNewForm(emptyForm)
       fetchItems(true)
@@ -115,9 +115,9 @@ export function ProviderTab({ providerKind, endpoint, refreshSignal, onOpenModel
 
   const handleDelete = async (item: BaseChannelItem) => {
     try {
-      const latest = await fetchMgmtApi(endpoint)
+      const latest = await fetchProviderConfig(endpoint)
       const updatedArray = buildProviderDeleteArray(providerKind, latest, item)
-      await fetchMgmtApi(endpoint, { method: 'PUT', body: JSON.stringify(updatedArray) })
+      await updateProviderConfig(endpoint, updatedArray)
       toast.success('删除成功')
       if (editingItem?._id === item._id) setEditingItem(null)
       fetchItems(true)
@@ -136,9 +136,9 @@ export function ProviderTab({ providerKind, endpoint, refreshSignal, onOpenModel
     if (!editingItem) return
     const f = formOverride ?? editForm
     try {
-      const latest = await fetchMgmtApi(endpoint)
+      const latest = await fetchProviderConfig(endpoint)
       const updatedArray = buildProviderEditArray(providerKind, latest, editingItem, f)
-      await fetchMgmtApi(endpoint, { method: 'PUT', body: JSON.stringify(updatedArray) })
+      await updateProviderConfig(endpoint, updatedArray)
       setEditForm(f)
       if (closeDialog) {
         toast.success('配置已更新')

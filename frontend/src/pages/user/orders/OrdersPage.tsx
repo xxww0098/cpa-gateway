@@ -1,6 +1,5 @@
-import { useEffect } from "react"
-import { Card, CardContent } from "@/shared/components/ui/card"
 import { Package } from "lucide-react"
+import { QueryStateWrapper } from "@/shared/components/QueryStateWrapper"
 import {
   useOrders,
   SubscriptionOrderCard,
@@ -28,14 +27,8 @@ export default function Orders() {
     refundedSubIds,
     pendingRefundSubIds,
     completedRefundSubIds,
-    loadSubscriptions,
     loadPaymentOrders,
   } = useOrders()
-
-  useEffect(() => {
-    loadSubscriptions()
-    loadPaymentOrders(1)
-  }, [loadPaymentOrders, loadSubscriptions])
 
   const orderTotalPages = Math.ceil(orderTotal / 20)
 
@@ -74,25 +67,11 @@ export default function Orders() {
 
       {activeTab === 'subscription' ? (
         <div className="space-y-6">
-          {subLoading ? (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-56 bg-gray-100 dark:bg-dark-800 rounded-xl animate-pulse" />
-              ))}
-            </div>
-          ) : subs.length === 0 ? (
-            <Card className="border-dashed border-2 border-gray-200 dark:border-dark-700 bg-gray-50/30 dark:bg-dark-900/30">
-              <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="w-16 h-16 bg-gray-100 dark:bg-dark-800 rounded-full flex items-center justify-center mb-4">
-                  <Package className="w-8 h-8 text-gray-400" />
-                </div>
-                <h4 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-2">暂无订单</h4>
-                <p className="text-sm text-gray-500 max-w-md">
-                  您当前没有任何订阅订单。如需获取订阅，请联系管理员分配或通过专属渠道开通。
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
+          <QueryStateWrapper
+            isLoading={subLoading}
+            isEmpty={!subLoading && subs.length === 0}
+            emptyMessage="您当前没有任何订阅订单。如需获取订阅，请联系管理员分配或通过专属渠道开通。"
+          >
             <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
               {subs.map((s) => {
                 const refundAmount = calculateRefund(s)
@@ -113,7 +92,7 @@ export default function Orders() {
                 )
               })}
             </div>
-          )}
+          </QueryStateWrapper>
         </div>
       ) : (
         <OrdersTable

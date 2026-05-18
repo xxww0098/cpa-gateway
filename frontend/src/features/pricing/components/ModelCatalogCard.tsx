@@ -3,7 +3,7 @@ import type { ComponentPropsWithoutRef, CSSProperties, KeyboardEvent, ReactNode,
 import { createPortal } from 'react-dom'
 import { Brain, Check, Copy, Database, DollarSign, Info, Loader2, Pencil, Zap } from 'lucide-react'
 import { toast } from 'sonner'
-import { fetchApi } from '@/shared/api/client'
+import { useUpdatePrice } from '@/features/pricing/hooks'
 import {
   getModelDetailMetrics,
   getModelProviderKey,
@@ -176,9 +176,9 @@ export function EditablePriceCell({
   currentPrices,
 }: EditablePriceCellProps) {
   const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [value, setValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const updatePrice = useUpdatePrice()
 
   const startEditing = useCallback(() => {
     if (!isAdmin) return
@@ -208,27 +208,23 @@ export function EditablePriceCell({
       return
     }
 
-    setSaving(true)
-    try {
-      await fetchApi('/admin/pricing/models', {
-        method: 'POST',
-        body: JSON.stringify({
-          model_id: modelId,
-          input_price_per_1m: field === 'input' ? newPrice : (currentPrices.input_price_per_1m ?? 0),
-          output_price_per_1m: field === 'output' ? newPrice : (currentPrices.output_price_per_1m ?? 0),
-          cached_input_price_per_1m: field === 'cached_input' ? newPrice : (currentPrices.cached_input_price_per_1m ?? 0),
-          reasoning_price_per_1m: field === 'reasoning' ? newPrice : (currentPrices.reasoning_price_per_1m ?? 0),
-        }),
-      })
-      toast.success(`${modelId} ${label}已更新为 $${newPrice.toFixed(4)}/1M`)
-      setEditing(false)
-      onSaved()
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : '保存定价失败')
-    } finally {
-      setSaving(false)
-    }
-  }, [value, price, modelId, field, label, currentPrices, cancel, onSaved])
+    updatePrice.mutate(
+      {
+        model_id: modelId,
+        input_price_per_1m: field === 'input' ? newPrice : (currentPrices.input_price_per_1m ?? 0),
+        output_price_per_1m: field === 'output' ? newPrice : (currentPrices.output_price_per_1m ?? 0),
+        cached_input_price_per_1m: field === 'cached_input' ? newPrice : (currentPrices.cached_input_price_per_1m ?? 0),
+        reasoning_price_per_1m: field === 'reasoning' ? newPrice : (currentPrices.reasoning_price_per_1m ?? 0),
+      },
+      {
+        onSuccess: () => {
+          toast.success(`${modelId} ${label}已更新为 $${newPrice.toFixed(4)}/1M`)
+          setEditing(false)
+          onSaved()
+        },
+      }
+    )
+  }, [value, price, modelId, field, label, currentPrices, cancel, onSaved, updatePrice])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -259,11 +255,11 @@ export function EditablePriceCell({
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={handleKeyDown}
               onBlur={save}
-              disabled={saving}
+              disabled={updatePrice.isPending}
               className="w-full bg-transparent text-xs font-semibold text-gray-900 dark:text-white outline-none placeholder:text-gray-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               placeholder="0.00"
             />
-            {saving && <Loader2 className="h-3 w-3 animate-spin text-primary-500 flex-shrink-0" />}
+            {updatePrice.isPending && <Loader2 className="h-3 w-3 animate-spin text-primary-500 flex-shrink-0" />}
           </div>
         </div>
       </div>

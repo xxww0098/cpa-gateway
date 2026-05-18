@@ -15,6 +15,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"github.com/xxww0098/cpa-gateway/api"
+	"github.com/xxww0098/cpa-gateway/config"
 	"github.com/xxww0098/cpa-gateway/infra"
 	"github.com/xxww0098/cpa-gateway/ledger"
 	"github.com/xxww0098/cpa-gateway/pricing"
@@ -47,7 +48,7 @@ func main() {
 // still lives in this repo's api package, and dispatches usage records to
 // UsagePlugin for Settle/Release accounting.
 func run(configPath string) error {
-	cfg, err := LoadConfig(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
@@ -59,16 +60,19 @@ func run(configPath string) error {
 	if err := infra.AutoMigrate(db); err != nil {
 		return err
 	}
+	if err := infra.RunCustomMigrations(db); err != nil {
+		return err
+	}
 
 	rdb := infra.InitRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 
-	if err := SeedModelPrices(db); err != nil {
+	if err := infra.SeedModelPrices(db); err != nil {
 		slog.Warn("failed to seed model prices; continuing startup", "error", err)
 	}
 	if err := api.EnsureSubscriptionSeeds(db); err != nil {
 		return err
 	}
-	if err := EnsureSDKManagementSeeds(db, cfg); err != nil {
+	if err := infra.EnsureSDKManagementSeeds(db, cfg); err != nil {
 		return err
 	}
 
@@ -78,17 +82,46 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	calc := pricing.NewCalculator(priceCache, cfg.Billing.DefaultPricePer1KTokens)
+	// Config stores the default price as "per 1K tokens" but the Calculator
+	// operates in "per 1M tokens" units (matching ModelPrice columns).
+	defaultPricePer1M := cfg.Billing.DefaultPricePer1KTokens * 1000
+	calc := pricing.NewCalculator(priceCache, defaultPricePer1M)
 
 	apiKeyCache := infra.NewAPIKeyCache()
 	ctx := context.Background()
-	go apiKeyCache.Start(ctx)
+
+	// Distributed infrastructure components.
+	rateLimiter := infra.NewRateLimiter(rdb, cfg.RateLimit)
+	circuitBreaker := infra.NewCircuitBreaker(rdb, cfg.CircuitBreaker)
+	idempotencyMgr := sdk.NewIdempotencyManager(rdb, 0) // 0 → default 24h TTL
+	budgetTokenStore := sdk.NewBudgetTokenStore()
 
 	// SDK interface implementations (access / usage / hold).
 	store := sdk.NewStore(db)
 	accessProvider := sdk.NewAccessProvider(db, rdb, apiKeyCache, cfg.Auth.JWT.Secret)
+	// Shared user-status cache: the same instance must be visible to both
+	// sdk.AccessProvider (for /v1/* auth rechecks) and api.PanelRouter (for
+	// /api/panel/** JWT rechecks and admin invalidation hooks) so a status
+	// flip observed on one surface is reflected on the other. Populated as a
+	// post-construction field to keep NewAccessProvider / NewPanelRouter
+	// signatures untouched.
+	userStatusCache := infra.NewUserStatusCache()
+	accessProvider.UserStatusCache = userStatusCache
 	usagePlugin := sdk.NewUsagePlugin(db, ldgr, calc)
+	usagePlugin.SetBudgetTokenStore(budgetTokenStore)
+	usagePlugin.SetLowBalanceThreshold(cfg.Billing.LowBalanceThresholdUSD)
+	// Wire the strict-usage-metadata toggle from config (Task 16.3). The
+	// default config value is `false` — conservative fallback settlement —
+	// and ops can flip to `true` via YAML / BILLING_STRICT_USAGE_METADATA_MODE
+	// to suspend billing on upstream responses that strip the usage envelope.
+	// See design.md "Observation recipe for ops" for the roll-out procedure.
+	usagePlugin.SetStrictUsageMetadataMode(cfg.Billing.StrictUsageMetadataMode)
+
 	holdMW := sdk.NewHoldMiddleware(ldgr, calc, db, holdMiddlewareTTL(cfg))
+	holdMW.SetRateLimiter(rateLimiter)
+	holdMW.SetCircuitBreaker(circuitBreaker)
+	holdMW.SetIdempotencyManager(idempotencyMgr)
+	holdMW.SetBudgetTokenStore(budgetTokenStore)
 
 	// Core auth manager — load the persisted auth store, then register the
 	// five runtime-only upstream executors sourced from CPA-Gateway config.
@@ -96,7 +129,7 @@ func run(configPath string) error {
 	if err := authMgr.Load(ctx); err != nil {
 		return err
 	}
-	if err := registerRuntimeAuths(authMgr, cfg); err != nil {
+	if err := sdk.RegisterRuntimeAuths(authMgr, cfg); err != nil {
 		return err
 	}
 
@@ -108,7 +141,19 @@ func run(configPath string) error {
 	panelRouter := api.NewPanelRouter(db, rdb, ldgr, calc, cfg)
 	panelRouter.AuthStore = store
 	panelRouter.AuthManager = authMgr
+	panelRouter.OAuthTokenRequester = sdkapi.NewManagementTokenRequester(buildSDKConfig(cfg), authMgr)
 	panelRouter.APIKeyCache = apiKeyCache
+	// Share the same ModelPriceCache instance used by the Calculator so that
+	// admin price upserts (handler_ops) can Invalidate the cache that the
+	// Calculator actually reads from. Constructing a second cache here would
+	// leave the Calculator's cache stale after invalidation.
+	panelRouter.PriceCache = priceCache
+	// Share the same UserStatusCache instance with AccessProvider so the Panel
+	// middleware and /v1/* auth see identical (userID → status) state. The
+	// sweeper goroutine is launched once for this shared instance; APIKeyCache
+	// uses its own sweeper started by StartCacheCleanup below.
+	panelRouter.UserStatusCache = userStatusCache
+	go userStatusCache.Start(ctx)
 	panelRouter.StartCacheCleanup(ctx)
 
 	// Build the SDK Service with HoldMiddleware and panel routes attached.
@@ -144,9 +189,9 @@ func run(configPath string) error {
 // bind, and AuthDir for the file-backed token store.
 //
 // Upstream credentials are NOT mirrored here: CPA-Gateway owns that
-// surface through registerRuntimeAuths and the SDK management API routes
+// surface through RegisterRuntimeAuths and the SDK management API routes
 // on /api/panel/admin/sdk-management.
-func buildSDKConfig(cfg *Config) *sdkconfig.Config {
+func buildSDKConfig(cfg *config.Config) *sdkconfig.Config {
 	host := cfg.Server.Host
 	if host == "" {
 		host = "127.0.0.1"
@@ -166,7 +211,7 @@ func buildSDKConfig(cfg *Config) *sdkconfig.Config {
 
 // holdMiddlewareTTL derives the Hold key TTL from the billing config,
 // defaulting to 5 minutes when unset.
-func holdMiddlewareTTL(cfg *Config) time.Duration {
+func holdMiddlewareTTL(cfg *config.Config) time.Duration {
 	if cfg != nil && cfg.Billing.HoldTTLSeconds > 0 {
 		return time.Duration(cfg.Billing.HoldTTLSeconds) * time.Second
 	}

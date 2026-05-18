@@ -105,7 +105,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if ok {
 		wrapped.Metadata["usage"] = tokens
 	}
-	e.publishUsage(ctx, auth, tokens, ok, failed, resp.StatusCode, payload, startedAt)
+	e.publishUsage(ctx, auth, req.Payload, tokens, ok, failed, resp.StatusCode, payload, startedAt)
 	if failed {
 		return wrapped, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
@@ -124,7 +124,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if resp.StatusCode >= http.StatusBadRequest {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(resp.Body)
-		e.publishUsage(ctx, auth, UsageTokens{}, false, true, resp.StatusCode, payload, startedAt)
+		e.publishUsage(ctx, auth, req.Payload, UsageTokens{}, false, true, resp.StatusCode, payload, startedAt)
 		return nil, &upstreamStatusError{status: resp.StatusCode, payload: payload}
 	}
 
@@ -146,7 +146,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				case <-ctx.Done():
 					streamErr = ctx.Err()
 					chunks <- cliproxyexecutor.StreamChunk{Err: streamErr}
-					e.publishStreamUsage(ctx, auth, accumulator.Bytes(), true, 0, startedAt)
+					e.publishStreamUsage(ctx, auth, req.Payload, accumulator.Bytes(), true, 0, startedAt)
 					return
 				case chunks <- cliproxyexecutor.StreamChunk{Payload: payload}:
 				}
@@ -156,7 +156,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 					streamErr = err
 					chunks <- cliproxyexecutor.StreamChunk{Err: err}
 				}
-				e.publishStreamUsage(ctx, auth, accumulator.Bytes(), streamErr != nil, resp.StatusCode, startedAt)
+				e.publishStreamUsage(ctx, auth, req.Payload, accumulator.Bytes(), streamErr != nil, resp.StatusCode, startedAt)
 				return
 			}
 		}
@@ -240,6 +240,15 @@ func (e *CodexExecutor) doChatCompletionsRequest(ctx context.Context, req clipro
 	endpoint, err := e.chatCompletionsEndpoint(opts.Query, baseURL)
 	if err != nil {
 		return nil, err
+	}
+	// Streaming requests must request the terminal usage envelope so the
+	// UsagePlugin can settle on precise token counts instead of its fallback
+	// estimate. EnsureIncludeUsage verifies `stream=true` in the body itself
+	// before mutating, so a mis-set opts.Stream cannot force include_usage
+	// onto a non-streaming payload. See executor/util.go for semantics —
+	// this mirrors the OpenAI executor path (Task 4.6).
+	if opts.Stream {
+		req.Payload = EnsureIncludeUsage(req.Payload)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(req.Payload))
 	if err != nil {
@@ -434,14 +443,34 @@ func (e *CodexExecutor) chatCompletionsEndpoint(query url.Values, baseURL string
 	return parsed.String(), nil
 }
 
+// codexModelFromBody extracts the "model" field from a JSON request body.
+// Returns empty string if the body is nil, not valid JSON, or lacks a model field.
+func codexModelFromBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var envelope struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Model)
+}
+
 // publishUsage emits a usage.Record to the SDK default manager. Codex surfaces
 // usage through the OpenAI-compatible `usage` field, so the body is parsed
 // by ParseCodexUsage (which delegates to ParseOpenAIUsage). When parsing
 // fails the record is still published with zero Detail — downstream
 // UsagePlugin can then fall back to heuristic accounting.
-func (e *CodexExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+func (e *CodexExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Auth, reqBody []byte, tokens UsageTokens, parsed bool, failed bool, status int, payload []byte, startedAt time.Time) {
+	model := codexModelFromBody(reqBody)
+	if model == "" {
+		model = cliproxyusage.RequestedModelAliasFromContext(ctx)
+	}
 	rec := cliproxyusage.Record{
 		Provider:    providerCodex,
+		Model:       model,
 		Alias:       cliproxyusage.RequestedModelAliasFromContext(ctx),
 		Source:      providerCodex,
 		RequestedAt: startedAt,
@@ -468,6 +497,10 @@ func (e *CodexExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Aut
 			Body:       truncateCodexFailureBody(payload),
 		}
 	}
+	// Propagate the "did we parse a terminal upstream usage envelope?" signal
+	// through the ctx the cliproxy manager hands to UsagePlugin.HandleUsage.
+	// See executor.WithUsageDetailPresent / Requirement 1.1.
+	ctx = WithUsageDetailPresent(ctx, parsed)
 	cliproxyusage.PublishRecord(ctx, rec)
 }
 
@@ -477,12 +510,12 @@ func (e *CodexExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Aut
 // ParseCodexUsage/ParseOpenAIUsage path tolerates SSE framing: json.Unmarshal
 // on the full buffer will simply fail and return (zero, false) which is the
 // contract publishUsage expects.
-func (e *CodexExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, body []byte, failed bool, status int, startedAt time.Time) {
+func (e *CodexExecutor) publishStreamUsage(ctx context.Context, auth *cliproxyauth.Auth, reqBody []byte, body []byte, failed bool, status int, startedAt time.Time) {
 	tokens, ok := UsageTokens{}, false
 	if len(body) > 0 {
 		tokens, ok = parseCodexSSEUsage(body)
 	}
-	e.publishUsage(ctx, auth, tokens, ok, failed, status, nil, startedAt)
+	e.publishUsage(ctx, auth, reqBody, tokens, ok, failed, status, nil, startedAt)
 }
 
 // parseCodexSSEUsage scans an OpenAI-style SSE buffer for the last

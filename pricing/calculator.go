@@ -87,6 +87,55 @@ func (c *Calculator) Estimate(modelID string, stream bool, rateMult float64) flo
 	return base * rateMult
 }
 
+// EstimateWithMaxTokens returns a tighter USD upper-bound for a request when
+// the caller can parse a client-supplied output cap (OpenAI `max_tokens` /
+// `max_completion_tokens`). It is used by HoldMiddleware's preflight
+// upper-bound check — the reserved Hold amount is still computed via
+// Estimate; this method only informs the "reject if upper bound exceeds
+// available balance" gate.
+//
+// Rules:
+//   - maxOutputTokens <= 0: fall back to Estimate(modelID, streaming, rateMult).
+//     Clients that omit the cap, or send a malformed value, should not benefit
+//     from a tighter bound; they get the conservative Estimate instead.
+//   - Known model: input is priced at estimatedTokens (the same nominal input
+//     reservation Estimate uses), output is priced at maxOutputTokens.
+//   - Unknown model: both columns fall back to defaultPrice, matching the
+//     shape of Estimate's unknown-model path.
+//   - streaming: scales the result by streamMultiplier (mirrors Estimate).
+//   - rateMult: final linear scaling applied after the base cost.
+//
+// Formula:
+//
+//	(inputPer1M*estimatedTokens + outputPer1M*maxOutputTokens) / 1_000_000
+//	  * streamMult * rateMult
+//
+// Existing Estimate / Compute signatures are intentionally left untouched —
+// this is an additive helper.
+func (c *Calculator) EstimateWithMaxTokens(modelID string, maxOutputTokens int64, streaming bool, rateMult float64) float64 {
+	if c == nil {
+		return 0
+	}
+	if maxOutputTokens <= 0 {
+		return c.Estimate(modelID, streaming, rateMult)
+	}
+
+	var inputPer1M, outputPer1M float64
+	if p, ok := c.lookup(modelID); ok {
+		inputPer1M = p.InputPricePer1M
+		outputPer1M = p.OutputPricePer1M
+	} else {
+		inputPer1M = c.defaultPrice
+		outputPer1M = c.defaultPrice
+	}
+
+	base := (inputPer1M*float64(estimatedTokens) + outputPer1M*float64(maxOutputTokens)) / 1_000_000.0
+	if streaming {
+		base *= streamMultiplier
+	}
+	return base * rateMult
+}
+
 // Compute returns the exact USD cost for a completed request, summing the
 // four token columns against the corresponding per-1M prices and scaling by
 // rateMult.

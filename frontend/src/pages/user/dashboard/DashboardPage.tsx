@@ -1,15 +1,6 @@
-import { useEffect, useState } from 'react'
-import { fetchApi, isAbortError } from '@/shared/api/client'
+import { useState } from 'react'
 import { useAuthStore } from '@/features/auth/auth_store'
-import type {
-  DashboardStats,
-  UsageStats,
-  AnnouncementItem,
-  TrendPoint,
-  ModelStat,
-  RecentUsage,
-  IntegrationTab,
-} from '@/features/user-dashboard/types'
+import type { IntegrationTab } from '@/features/user-dashboard/types'
 import { DashboardAnnouncements } from '@/features/user-dashboard/components/DashboardAnnouncements'
 import { AdminDashboardOverview } from '@/features/user-dashboard/components/AdminDashboardOverview'
 import { AdminDashboardCharts } from '@/features/user-dashboard/components/AdminDashboardCharts'
@@ -17,110 +8,33 @@ import { UserDashboardHero } from '@/features/user-dashboard/components/UserDash
 import { UserDashboardCharts } from '@/features/user-dashboard/components/UserDashboardCharts'
 import { RecentUsageTable } from '@/features/user-dashboard/components/RecentUsageTable'
 import { QuickIntegrationPanel } from '@/features/user-dashboard/components/QuickIntegrationPanel'
+import {
+  useDashboardStats,
+  useDashboardTrend,
+  useDashboardModels,
+  useRecentUsage,
+  useAnnouncements,
+} from '@/features/user-dashboard/hooks'
 
 export default function Dashboard() {
   const user = useAuthStore(s => s.user)
   const isAdmin = user?.role === 'admin'
-  const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
   const [integrationTab, setIntegrationTab] = useState<IntegrationTab>('openai')
-
-  // Phase 2: Chart data
-  const [trendData, setTrendData] = useState<TrendPoint[]>([])
-  const [modelData, setModelData] = useState<ModelStat[]>([])
-  const [recentUsage, setRecentUsage] = useState<RecentUsage[]>([])
   const [trendDays, setTrendDays] = useState<7 | 30>(7)
 
-  useEffect(() => {
-    const controller = new AbortController()
-    const { signal } = controller
+  // Data hooks
+  const { stats, usageStats, loading: statsLoading } = useDashboardStats()
+  const trendQuery = useDashboardTrend(trendDays)
+  const modelsQuery = useDashboardModels()
+  const recentUsageQuery = useRecentUsage()
+  const announcementsQuery = useAnnouncements()
 
-    const loadStats = async () => {
-      try {
-        if (isAdmin) {
-          // Fire all admin requests in parallel
-          const [dashboardRes, trendRes, modelRes, annRes] = await Promise.all([
-            fetchApi('/admin/dashboard', { signal }),
-            fetchApi(`/admin/usage/trend?days=${trendDays}`, { signal }).catch(err => {
-              if (!signal.aborted && !isAbortError(err)) console.error("Failed to fetch admin chart data")
-              return null
-            }),
-            fetchApi('/admin/usage/models?days=30', { signal }).catch(err => {
-              if (!signal.aborted && !isAbortError(err)) console.error("Failed to fetch admin chart data")
-              return null
-            }),
-            fetchApi('/user/announcements', { signal }).catch(() => null),
-          ])
-          if (signal.aborted) return
-          setStats(dashboardRes.data)
-          if (trendRes) setTrendData(trendRes.data || [])
-          if (modelRes) setModelData(modelRes.data || [])
-          if (annRes) setAnnouncements(annRes.data || [])
-        } else {
-          // Fire all user requests in parallel
-          const [profileRes, usageRes, trendRes, modelRes, recentRes, annRes] = await Promise.all([
-            fetchApi('/user/profile', { signal }),
-            fetchApi('/user/usage/stats', { signal }).catch(err => {
-              if (!signal.aborted && !isAbortError(err)) console.error("Failed to fetch user usage stats")
-              return null
-            }),
-            fetchApi(`/user/usage/trend?days=${trendDays}`, { signal }).catch(err => {
-              if (!signal.aborted && !isAbortError(err)) console.error("Failed to fetch chart data")
-              return null
-            }),
-            fetchApi('/user/usage/models?days=30', { signal }).catch(() => null),
-            fetchApi('/user/usage/detail?page=1&page_size=5', { signal }).catch(() => null),
-            fetchApi('/user/announcements', { signal }).catch(() => null),
-          ])
-          if (signal.aborted) return
-          const ustats = usageRes?.data?.usage ?? null
-          const userBalance = profileRes.data.available_balance ?? profileRes.data.user?.balance ?? 0
-          setStats({
-            users: { total: 1, active: 1 },
-            api_keys: { total: profileRes.data.key_count, active: profileRes.data.key_count },
-            usage: { today_requests: ustats?.total_requests || 0, today_cost: userBalance, week_requests: 0 },
-            isUser: true,
-            balance: userBalance,
-            quota: profileRes.data.quota || 0,
-            used_quota: profileRes.data.used_quota || 0,
-          })
-          setUsageStats(ustats)
-          if (trendRes) setTrendData(trendRes.data || [])
-          if (modelRes) setModelData(modelRes.data || [])
-          if (recentRes) setRecentUsage(recentRes.data?.items || [])
-          if (annRes) setAnnouncements(annRes.data || [])
-        }
-      } catch (err) {
-        if (!signal.aborted && !isAbortError(err)) console.error(err)
-      } finally {
-        if (!signal.aborted) setLoading(false)
-      }
-    }
-    void loadStats()
+  const trendData = trendQuery.data || []
+  const modelData = modelsQuery.data || []
+  const recentUsage = recentUsageQuery.data || []
+  const announcements = announcementsQuery.data || []
 
-    return () => { controller.abort() }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin])
-
-  // Reload trend when days change
-  useEffect(() => {
-    const controller = new AbortController()
-
-    const url = isAdmin
-      ? `/admin/usage/trend?days=${trendDays}`
-      : `/user/usage/trend?days=${trendDays}`
-
-    fetchApi(url, { signal: controller.signal }).then(res => {
-      if (!controller.signal.aborted) setTrendData(res.data || [])
-    }).catch(() => {})
-
-    return () => { controller.abort() }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trendDays])
-
-  if (loading) {
+  if (statsLoading) {
     return <DashboardSkeleton />
   }
 

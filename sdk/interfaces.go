@@ -27,6 +27,39 @@ type BillingLedger interface {
 	// Release clears the hold for requestID without touching the
 	// persistent balance. Used when the upstream request failed.
 	Release(ctx context.Context, userID uint, requestID string) error
+
+	// ActiveHoldAmount returns the amount currently held against userID
+	// for requestID without mutating any state. The second return value
+	// is false when no hold exists for that (userID, requestID) pair, in
+	// which case the amount is 0 and err is nil. Any non-nil error
+	// indicates an infrastructure failure that the caller should treat as
+	// "unknown" rather than "no hold". The UsagePlugin's fallback
+	// settlement path uses this to compute the Active_Hold_Amount lower
+	// bound when upstream usage metadata is absent (see Requirements 1.3,
+	// 1.5). Mirrors ledger.Ledger.ActiveHoldAmount 1:1.
+	ActiveHoldAmount(ctx context.Context, userID uint, requestID string) (float64, bool, error)
+
+	// HasUnresolvedShortfall reports whether userID owns at least one
+	// settle BalanceLog row with a positive Metadata.shortfall_usd that
+	// has NOT been paired with a compensating credit (reference ==
+	// "shortfall_resolve:<debit.reference>:<debit.id>"). The
+	// HoldMiddleware preflight (task 6.4) and PurchaseSubscriptionHandler
+	// (task 11.1) call this before allowing any further billable work so
+	// a tenant carrying an unresolved debt cannot rack up more. See
+	// Requirements 2.5, 2.6. Mirrors ledger.Ledger.HasUnresolvedShortfall
+	// 1:1.
+	HasUnresolvedShortfall(ctx context.Context, userID uint) (bool, error)
+}
+
+// BalanceQuerier is an optional interface that a BillingLedger
+// implementation may satisfy to support structured 402 error responses
+// with the user's current available balance. If the ledger does not
+// implement this interface, the middleware falls back to a generic
+// insufficient balance message.
+type BalanceQuerier interface {
+	// GetBalance returns the available balance (cached balance minus
+	// active holds) for the given user.
+	GetBalance(ctx context.Context, userID uint) (float64, error)
 }
 
 // PricingCalculator is the minimal pricing surface consumed by the Hold
@@ -36,6 +69,15 @@ type BillingLedger interface {
 type PricingCalculator interface {
 	// Estimate returns an over-approximate USD cost used by Hold.
 	Estimate(model string, stream bool, rateMult float64) float64
+
+	// EstimateWithMaxTokens returns a tighter USD upper-bound for the
+	// HoldMiddleware preflight when the caller parses a client-supplied
+	// output cap (OpenAI max_tokens / max_completion_tokens). A
+	// non-positive maxOutputTokens MUST fall back to Estimate so clients
+	// that omit the cap get the conservative streaming estimate instead
+	// of a vacuous zero upper-bound. Mirrors
+	// pricing.Calculator.EstimateWithMaxTokens 1:1.
+	EstimateWithMaxTokens(model string, maxOutputTokens int64, stream bool, rateMult float64) float64
 
 	// Compute returns the exact USD cost using per-column token counts,
 	// used by Settle.

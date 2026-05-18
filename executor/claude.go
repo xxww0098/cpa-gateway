@@ -464,6 +464,12 @@ func (e *ClaudeExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Au
 			Body:       truncateClaudeFailureBody(payload),
 		}
 	}
+	// Propagate the "did we parse a terminal upstream usage envelope?" signal
+	// through the ctx the cliproxy manager hands to UsagePlugin.HandleUsage.
+	// Claude's message_start / message_delta frames always carry a `usage`
+	// envelope on happy-path streams, so `parsed` is typically true — but we
+	// still thread the parser's bool through unmodified (Requirement 1.1).
+	ctx = WithUsageDetailPresent(ctx, parsed)
 	cliproxyusage.PublishRecord(ctx, rec)
 }
 

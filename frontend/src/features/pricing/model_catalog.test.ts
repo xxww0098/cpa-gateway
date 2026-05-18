@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeAll } from 'vitest'
 import {
   configuredModelToCatalogItem,
   enrichModelCatalogItem,
@@ -17,8 +17,13 @@ import {
   PROVIDER_CONFIG,
   type ModelCatalogItem,
 } from './model_catalog'
+import { loadModelRegistries } from './model_provider'
 
 describe('model_catalog', () => {
+  beforeAll(async () => {
+    await loadModelRegistries()
+  })
+
   const models: ModelCatalogItem[] = [
     { id: 'gpt-5.4-mini', owned_by: 'openai', display_name: 'GPT 5.4 Mini' },
     { id: 'claude-opus-4-7', owned_by: 'anthropic', display_name: 'Claude Opus 4.7' },

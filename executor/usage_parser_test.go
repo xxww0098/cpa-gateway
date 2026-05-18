@@ -1,6 +1,9 @@
 package executor
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestParseOpenAIUsage_Full validates that ParseOpenAIUsage extracts
 // prompt/completion tokens together with cached and reasoning fields when
@@ -268,5 +271,76 @@ func TestParseVertexUsage(t *testing.T) {
 	}
 	if _, ok := ParseVertexUsage([]byte(`not-json`)); ok {
 		t.Fatal("expected ok=false for malformed JSON")
+	}
+}
+
+// --- UsageDetailPresent context carrier ------------------------------------
+
+// TestUsageDetailPresentRoundTrip verifies that a value written with
+// WithUsageDetailPresent is observable via UsageDetailPresentFromContext
+// with the expected (present, ok) pair. Both true and false markers must
+// round-trip, so the signal can distinguish "parsed usage envelope" from
+// "explicitly marked as missing".
+func TestUsageDetailPresentRoundTrip(t *testing.T) {
+	base := context.Background()
+
+	for _, want := range []bool{true, false} {
+		ctx := WithUsageDetailPresent(base, want)
+		got, ok := UsageDetailPresentFromContext(ctx)
+		if !ok {
+			t.Fatalf("present=%v: expected ok=true after WithUsageDetailPresent", want)
+		}
+		if got != want {
+			t.Fatalf("present=%v: got %v", want, got)
+		}
+	}
+}
+
+// TestUsageDetailPresentMissingKey enforces the critical safety default
+// documented in Requirement 1: a context that never carried the marker must
+// yield (false, false), so consumers treating ok=false as "not presented"
+// stay on the fallback / strict code path.
+func TestUsageDetailPresentMissingKey(t *testing.T) {
+	got, ok := UsageDetailPresentFromContext(context.Background())
+	if ok {
+		t.Fatalf("expected ok=false for bare context, got (%v, true)", got)
+	}
+	if got {
+		t.Fatalf("expected present=false for bare context, got true")
+	}
+}
+
+// TestUsageDetailPresentNilContext confirms that passing a nil context is
+// non-fatal in both directions. The carrier is crossing a boundary between
+// executor publishers and the SDK consumer, so defensive handling of nil
+// prevents panics if an intermediate layer forgets to forward ctx.
+func TestUsageDetailPresentNilContext(t *testing.T) {
+	// Read from nil context.
+	got, ok := UsageDetailPresentFromContext(nil) //nolint:staticcheck // intentional nil check
+	if ok || got {
+		t.Fatalf("expected (false,false) from nil context, got (%v,%v)", got, ok)
+	}
+
+	// Write to nil context: must upgrade to context.Background and succeed.
+	ctx := WithUsageDetailPresent(nil, true) //nolint:staticcheck // intentional nil check
+	if ctx == nil {
+		t.Fatalf("WithUsageDetailPresent(nil, true) returned nil ctx")
+	}
+	got, ok = UsageDetailPresentFromContext(ctx)
+	if !ok || !got {
+		t.Fatalf("expected (true,true) after WithUsageDetailPresent(nil,true), got (%v,%v)", got, ok)
+	}
+}
+
+// TestUsageDetailPresentOverwrite documents the last-write-wins semantics
+// that the sdk/usage plugin relies on: if an executor layer wraps the ctx
+// twice (e.g. retry stacking), the innermost marker governs.
+func TestUsageDetailPresentOverwrite(t *testing.T) {
+	ctx := WithUsageDetailPresent(context.Background(), false)
+	ctx = WithUsageDetailPresent(ctx, true)
+
+	got, ok := UsageDetailPresentFromContext(ctx)
+	if !ok || !got {
+		t.Fatalf("expected overwrite to stick, got (%v,%v)", got, ok)
 	}
 }

@@ -2,6 +2,7 @@
 export * from "./types"
 export * from "./constants"
 export * from "./hooks"
+export * from "./api"
 export { AdminSubscriptionStatusBadge } from "./components/AdminSubscriptionStatusBadge"
 export { AdminSubscriptionUsageBar } from "./components/AdminSubscriptionUsageBar"
 export { AdminSubscriptionAssignDialog } from "./components/AdminSubscriptionAssignDialog"

@@ -2,8 +2,46 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 )
+
+// usageDetailPresentKey is the unexported context key used to carry the
+// "did the executor parse a terminal upstream usage envelope?" signal from
+// the publisher (executor/openai, codex, claude, gemini, vertex) through to
+// the consumer (sdk/usage.UsagePlugin.HandleUsage). The key type is a
+// zero-sized struct per the Go context guidelines so it cannot collide with
+// any other package's key.
+type usageDetailPresentKey struct{}
+
+// WithUsageDetailPresent returns a copy of ctx annotated with whether the
+// caller parsed a terminal usage envelope from the upstream response. The
+// value is propagated alongside the cliproxy usage.Record so that the
+// UsagePlugin can differentiate "real zero-token response" from "upstream
+// usage metadata missing/stripped" without changing the cliproxy Record
+// struct (which is an external, unowned dependency).
+func WithUsageDetailPresent(ctx context.Context, present bool) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, usageDetailPresentKey{}, present)
+}
+
+// UsageDetailPresentFromContext reports whether a WithUsageDetailPresent
+// marker is attached to ctx, and if so returns its boolean value. A missing
+// key yields (false, false). Consumers MUST treat ok=false as "not
+// presented", i.e. force the fallback / strict path defined by
+// Requirement 1.
+func UsageDetailPresentFromContext(ctx context.Context) (bool, bool) {
+	if ctx == nil {
+		return false, false
+	}
+	v, ok := ctx.Value(usageDetailPresentKey{}).(bool)
+	if !ok {
+		return false, false
+	}
+	return v, true
+}
 
 // UsageTokens is the provider-agnostic token tally extracted from an upstream
 // response body. It is declared in the executor package (not in `pricing`) so

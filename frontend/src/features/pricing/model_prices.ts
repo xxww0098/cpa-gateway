@@ -1,5 +1,4 @@
-import { apiCallApi } from '@/shared/api/request';
-import { fetchMgmtApi } from '@/features/admin-proxy/api';
+import { apiCallRequest, fetchMgmtApi } from '@/features/admin-proxy/api';
 
 export interface ModelInfo {
   name: string;
@@ -218,7 +217,7 @@ export const modelsApi = {
    */
   async fetchStaticModelDefinitions(channel: string): Promise<SDKModelDefinition[]> {
     if (!channel) return [];
-    const data = await fetchMgmtApi(`/model-definitions/${encodeURIComponent(channel)}`);
+    const data = (await fetchMgmtApi(`/model-definitions/${encodeURIComponent(channel)}`)) as { models?: unknown } | undefined;
     const models = data?.models;
     if (!Array.isArray(models)) return [];
     return models as SDKModelDefinition[];
@@ -230,7 +229,7 @@ export const modelsApi = {
    */
   async fetchAuthFileModels(authName: string): Promise<SDKModelDefinition[]> {
     if (!authName) return [];
-    const data = await fetchMgmtApi(`/auth-files/models?name=${encodeURIComponent(authName)}`);
+    const data = (await fetchMgmtApi(`/auth-files/models?name=${encodeURIComponent(authName)}`)) as { models?: unknown } | undefined;
     const models = data?.models;
     if (!Array.isArray(models)) return [];
     return models as SDKModelDefinition[];
@@ -279,7 +278,7 @@ export const modelsApi = {
       resolvedHeaders['Accept'] = 'application/json';
     }
 
-    const result = await apiCallApi.request({
+    const result = await apiCallRequest({
       method: 'GET',
       url: endpoint,
       header: Object.keys(resolvedHeaders).length ? resolvedHeaders : undefined
@@ -337,7 +336,7 @@ export const modelsApi = {
       resolvedHeaders['Accept'] = 'application/json';
     }
 
-    const result = await apiCallApi.request({
+    const result = await apiCallRequest({
       method: 'GET',
       url: endpoint,
       header: Object.keys(resolvedHeaders).length ? resolvedHeaders : undefined
@@ -390,7 +389,7 @@ export const modelsApi = {
     }
 
     const urlObj = new URL(endpoint);
-    const result = await apiCallApi.request({
+    const result = await apiCallRequest({
       method: 'GET',
       url: urlObj.toString(),
       header: Object.keys(resolvedHeaders).length ? resolvedHeaders : undefined

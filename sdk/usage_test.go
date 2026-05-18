@@ -7,6 +7,7 @@ import (
 	"time"
 
 	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	"github.com/xxww0098/cpa-gateway/executor"
 	"github.com/xxww0098/cpa-gateway/model"
 	"github.com/xxww0098/cpa-gateway/pricing"
 	"gorm.io/driver/sqlite"
@@ -71,6 +72,20 @@ func (f *fakeLedger) Release(_ context.Context, userID uint, requestID string) e
 	return f.errOnRelease
 }
 
+// ActiveHoldAmount satisfies the BillingLedger interface added in Stage 2
+// (task 5.1). The UsagePlugin tests in this file do not yet exercise the
+// fallback-settlement path, so the mock returns (0, false, nil).
+func (f *fakeLedger) ActiveHoldAmount(_ context.Context, _ uint, _ string) (float64, bool, error) {
+	return 0, false, nil
+}
+
+// HasUnresolvedShortfall satisfies the BillingLedger interface extension
+// added in task 1.6. The UsagePlugin tests in this file never construct an
+// unresolved-shortfall scenario, so the stub returns (false, nil).
+func (f *fakeLedger) HasUnresolvedShortfall(_ context.Context, _ uint) (bool, error) {
+	return false, nil
+}
+
 // fakeCalculator returns a configurable cost from Compute so tests can pin
 // the exact number that UsagePlugin writes into UsageLog and the balance
 // counters. Estimate is unused by HandleUsage but satisfies the interface.
@@ -85,6 +100,14 @@ type fakeCalculator struct {
 }
 
 func (f *fakeCalculator) Estimate(_ string, _ bool, _ float64) float64 { return 0 }
+
+// EstimateWithMaxTokens satisfies the PricingCalculator interface extension
+// introduced in task 6.1. The UsagePlugin tests in this file do not exercise
+// the preflight upper-bound path, so returning 0 matches the existing
+// Estimate stub.
+func (f *fakeCalculator) EstimateWithMaxTokens(_ string, _ int64, _ bool, _ float64) float64 {
+	return 0
+}
 
 func (f *fakeCalculator) Compute(model string, tokens pricing.UsageTokens, rateMult float64) float64 {
 	f.lastTokens = tokens
@@ -125,8 +148,14 @@ func newUsageTestDB(t *testing.T) *gorm.DB {
 // newCtxWithSettle builds a context carrying a SettleCtx with the given
 // identifiers. Tests use it to exercise the plugin's "happy path" that
 // depends on an upstream HoldMiddleware injection.
+//
+// The returned context is also annotated with Usage_Detail_Present = true
+// so HandleUsage's three-branch switch (see sdk/usage.go) takes the
+// precise-settle path. Tests that want to exercise the fallback/strict
+// branches construct their own context without this marker.
 func newCtxWithSettle(sc *SettleCtx) context.Context {
-	return WithSettleCtx(context.Background(), sc)
+	ctx := WithSettleCtx(context.Background(), sc)
+	return executor.WithUsageDetailPresent(ctx, true)
 }
 
 // -----------------------------------------------------------------------------

@@ -79,11 +79,11 @@ export default function Home() {
               </p>
 
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4">
-                <Link to={isAuthenticated ? dashboardPath : '/login'} className="btn btn-primary btn-lg w-full sm:w-auto px-8 shadow-glow">
+                <Link to={isAuthenticated ? dashboardPath : '/login'} className="btn btn-primary btn-lg w-full sm:w-auto px-8 py-4 text-base shadow-glow">
                   {isAuthenticated ? '进入控制台' : '立即开始接入'}
                   <ChevronRight className="ml-1 h-5 w-5" />
                 </Link>
-                <a href="https://github.com/router-for-me/CLIProxyAPI" target="_blank" rel="noreferrer" className="btn btn-secondary btn-lg w-full sm:w-auto px-8">
+                <a href="https://github.com/router-for-me/CLIProxyAPI" target="_blank" rel="noreferrer" className="btn btn-secondary btn-lg w-full sm:w-auto px-8 py-4 text-base">
                   <Code2 className="mr-2 h-5 w-5" />
                   查看 SDK 文档
                 </a>

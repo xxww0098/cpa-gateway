@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import { getUserBalanceHistory } from '../api'
-import type { UserItem, BalanceHistoryEntry } from '../types'
+import { useUserBalanceHistory } from '../hooks'
+import type { UserItem } from '../types'
 
 interface Props {
   open: boolean
@@ -23,18 +22,7 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 export function AdminUserHistoryDialog({ open, onOpenChange, user }: Props) {
-  const [entries, setEntries] = useState<BalanceHistoryEntry[]>([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (open && user) {
-      setLoading(true)
-      getUserBalanceHistory(user.id)
-        .then(setEntries)
-        .catch(() => setEntries([]))
-        .finally(() => setLoading(false))
-    }
-  }, [open, user])
+  const { data: entries = [], isLoading: loading } = useUserBalanceHistory(user?.id ?? null, open && user !== null)
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>

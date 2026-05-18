@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useCallback } from "react"
 import { Elements, CardElement, useStripe, useElements } from "@stripe/react-stripe-js"
 import type { StripeCardElementOptions } from "@stripe/stripe-js"
-import { fetchApi } from "@/shared/api/client"
+import { useQueryClient } from "@tanstack/react-query"
 import { getStripe } from "@/features/payment/stripe"
 import { useAuthStore } from "@/features/auth/auth_store"
+import { useStripeConfig, useCreateStripePayment } from "@/features/payment/hooks"
+import { apiClient } from "@/shared/api/client"
+import { queryKeys } from "@/shared/api/query-keys"
 import { toast } from "sonner"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card"
@@ -20,18 +23,7 @@ import {
   Zap,
 } from "lucide-react"
 
-interface StripeConfig {
-  publishable_key: string
-  mode: string
-  enabled: boolean
-}
-
-interface CreatePaymentResult {
-  client_secret: string
-  order_id: string
-  payment_intent_id: string
-  amount_usd: number
-}
+import type { StripeConfig } from "@/features/payment/types"
 
 const PRESET_AMOUNTS = [10, 50, 100, 500]
 
@@ -60,6 +52,7 @@ function CheckoutForm({
 }) {
   const stripe = useStripe()
   const elements = useElements()
+  const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const updateUser = useAuthStore((s) => s.updateUser)
   const token = useAuthStore((s) => s.token)
@@ -70,6 +63,8 @@ function CheckoutForm({
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
   const [successAmount, setSuccessAmount] = useState<number>(0)
+
+  const createPayment = useCreateStripePayment()
 
   const selectedAmount = isCustom
     ? parseFloat(customAmount) || 0
@@ -88,19 +83,20 @@ function CheckoutForm({
   const pollBalance = useCallback(async () => {
     if (!token) return
     try {
-      const res = await fetchApi("/user/profile")
-      if (res?.data) {
-        const balance = res.data.available_balance ?? res.data.user?.balance
-        if (typeof balance === "number") {
-          updateUser({ balance })
-        }
+      const res = await apiClient.get<{ available_balance?: number; user?: { balance?: number } }>('/user/profile')
+      const balance = res?.available_balance ?? res?.user?.balance
+      if (typeof balance === "number") {
+        updateUser({ balance })
       }
+      // Also invalidate the profile query so the Header (driven by useProfile)
+      // picks up the new available_balance immediately.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.auth.profile() })
     } catch {
       // ignore polling errors
     }
-  }, [token, updateUser])
+  }, [token, updateUser, queryClient])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: { preventDefault: () => void }) => {
     e.preventDefault()
 
     if (!stripe || !elements) {
@@ -122,12 +118,11 @@ function CheckoutForm({
     setLoading(true)
 
     try {
-      // 1. Create payment intent
-      const createRes = await fetchApi("/payment/stripe/create", {
-        method: "POST",
-        body: JSON.stringify({ amount: selectedAmount, currency: "USD" }),
+      // 1. Create payment intent via hook's mutateAsync
+      const paymentData = await createPayment.mutateAsync({
+        amount: selectedAmount,
+        currency: "USD",
       })
-      const paymentData: CreatePaymentResult = createRes.data
 
       if (!paymentData?.client_secret) {
         throw new Error("创建支付订单失败：未返回 client_secret")
@@ -283,56 +278,33 @@ interface StripePaymentProps {
 }
 
 export default function StripePayment({ onSuccess }: StripePaymentProps) {
-  const [config, setConfig] = useState<StripeConfig | null>(null)
-  const [configLoading, setConfigLoading] = useState(true)
+  const { data: config, isLoading: configLoading, error: configError, refetch } = useStripeConfig()
   const [stripeLoaded, setStripeLoaded] = useState(false)
   const [stripeError, setStripeError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
 
-  useEffect(() => {
-    let cancelled = false
-    setConfigLoading(true)
-    setStripeError(null)
-
-    fetchApi("/payment/stripe/config")
-      .then((res) => {
-        if (cancelled) return
-        const data: StripeConfig = res.data
-        setConfig(data)
-        if (data?.enabled && data?.publishable_key) {
-          getStripe(data.publishable_key)
-            .then(() => {
-              if (!cancelled) setStripeLoaded(true)
-            })
-            .catch((err) => {
-              if (!cancelled) {
-                const msg = err instanceof Error ? err.message : "加载 Stripe 失败"
-                toast.error(msg)
-                setStripeError(msg)
-              }
-            })
-        }
+  // Load Stripe SDK when config is available
+  const stripeReady = config?.enabled && config?.publishable_key
+  if (stripeReady && !stripeLoaded && !stripeError) {
+    getStripe(config.publishable_key)
+      .then(() => setStripeLoaded(true))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "加载 Stripe 失败"
+        toast.error(msg)
+        setStripeError(msg)
       })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : "获取配置失败"
-          toast.error(msg)
-          setStripeError(msg)
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setConfigLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [refreshKey])
+  }
 
   const handleSuccess = useCallback(() => {
     setRefreshKey((k) => k + 1)
     onSuccess?.()
   }, [onSuccess])
+
+  const handleRetry = useCallback(() => {
+    setStripeError(null)
+    setRefreshKey((k) => k + 1)
+    refetch()
+  }, [refetch])
 
   return (
     <Card className="shadow-sm border-border">
@@ -355,16 +327,13 @@ export default function StripePayment({ onSuccess }: StripePaymentProps) {
           <div className="flex items-center justify-center py-10">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
-        ) : stripeError ? (
+        ) : configError || stripeError ? (
           <div className="flex flex-col items-center justify-center py-10">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => {
-                setStripeError(null)
-                setRefreshKey((k) => k + 1)
-              }}
+              onClick={handleRetry}
             >
               重新加载
             </Button>

@@ -1,49 +1,27 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { fetchApi } from '@/shared/api/client'
+import { useState, useMemo, useCallback } from 'react'
 import { useAuthStore } from '@/features/auth/auth_store'
-import { toast } from 'sonner'
 import { Search, RefreshCw, Cpu, Pencil } from 'lucide-react'
 import {
-  enrichModelCatalogItem,
   getModelProviderKey,
   getProviderDisplayName,
   getProviderOptions,
   matchesModelSearch,
-  type ModelCatalogItem,
 } from '@/features/pricing/model_catalog'
 import { ModelCatalogCard } from '@/features/pricing/components/ModelCatalogCard'
 import { getProviderStyle } from '@/features/pricing/modelCatalogUtils'
+import { useModels } from '@/features/pricing/hooks'
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export default function Models() {
-  const [models, setModels] = useState<ModelCatalogItem[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterProvider, setFilterProvider] = useState('all')
-  const [rateMultiplier, setRateMultiplier] = useState(1)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const user = useAuthStore((s) => s.user)
   const isAdmin = user?.role === 'admin'
 
-  const fetchModels = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true)
-    try {
-      const res = await fetchApi('/user/models')
-      const raw = (res.data?.models || []) as ModelCatalogItem[]
-      setModels(raw.map((m) => enrichModelCatalogItem(m)))
-      setRateMultiplier(res.data?.rate_multiplier || 1)
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : '加载模型列表失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchModels()
-  }, [fetchModels])
+  const { models, rateMultiplier, isLoading: loading, refetch } = useModels()
 
   const providers = useMemo(() => {
     return getProviderOptions(models)
@@ -60,11 +38,11 @@ export default function Models() {
     return items
   }, [models, filterProvider, search])
 
-  const handleCopy = (id: string) => {
+  const handleCopy = useCallback((id: string) => {
     navigator.clipboard.writeText(id)
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 1500)
-  }
+  }, [])
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500" style={{ willChange: 'transform, opacity' }}>
@@ -132,7 +110,7 @@ export default function Models() {
             />
           </div>
           <button
-            onClick={() => fetchModels(false)}
+            onClick={() => refetch()}
             disabled={loading}
             className="h-9 rounded-lg border border-gray-200 dark:border-dark-600 bg-white dark:bg-dark-900 px-3 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-dark-800 transition-colors inline-flex items-center gap-1.5 disabled:opacity-50"
           >
@@ -162,7 +140,7 @@ export default function Models() {
               isAdmin={isAdmin}
               copied={copiedId === m.id}
               onCopy={handleCopy}
-              onPriceSaved={() => fetchModels(true)}
+              onPriceSaved={() => refetch()}
             />
           ))}
         </div>

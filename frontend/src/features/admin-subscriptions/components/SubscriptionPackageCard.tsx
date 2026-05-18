@@ -1,3 +1,4 @@
+import { memo } from "react"
 import { Card, CardContent } from "@/shared/components/ui/card"
 import { Button } from "@/shared/components/ui/button"
 import { Badge } from "@/shared/components/ui/badge"
@@ -12,7 +13,7 @@ interface Props {
   onDelete: (g: Group) => void
 }
 
-export function SubscriptionPackageCard({ group, onEdit, onDelete }: Props) {
+export const SubscriptionPackageCard = memo(function SubscriptionPackageCard({ group, onEdit, onDelete }: Props) {
   const selfServiceOn =
     group.subscription_price_usd != null && Number(group.subscription_price_usd) > 0
   const priceLabel =
@@ -103,4 +104,4 @@ export function SubscriptionPackageCard({ group, onEdit, onDelete }: Props) {
       </CardContent>
     </Card>
   )
-}
+})

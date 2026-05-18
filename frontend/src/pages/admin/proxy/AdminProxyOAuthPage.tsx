@@ -1,28 +1,77 @@
 import { useEffect, useState, useCallback, useRef } from "react"
-import { fetchMgmtApi } from '@/features/admin-proxy/api'
+import {
+  fetchProviderConfig,
+  postProviderConfig,
+  submitGatewayOAuthCallback,
+  submitSdkOAuthCallback,
+} from '@/features/admin-proxy/api'
+import { parseOAuthCallbackInput } from '@/features/admin-proxy/oauthCallbackUtils'
+import { Input } from '@/shared/components/ui/input'
 import { toast } from "sonner"
 import {
   Shield, RefreshCw, ExternalLink, Loader2, CheckCircle2,
-  XCircle, KeyRound, Globe
+  XCircle, KeyRound, Globe, ClipboardPaste
 } from "lucide-react"
 import { Link } from "react-router-dom"
+import { OAuthProviderBrandIcon } from '@/features/admin-proxy/components/OAuthProviderBrandIcon'
+import { cn } from '@/shared/utils/utils'
 
 // ── OAuth 提供商定义（与 SDK TUI 保持一致）──
+type ManualCallbackMode = 'gateway' | 'sdk' | 'none'
+
 interface OAuthProvider {
   name: string
-  key: string        // 用于 oauth-callback 的 provider key
-  apiPath: string    // SDK management API path
-  callbackPath?: string
-  emoji: string
-  color: string      // 用于 UI 区分
+  key: string
+  apiPath: string
+  /** Gateway oauth-callback/:provider path segment (gemini, claude, codex, xai). */
+  gatewayCallbackProvider?: string
+  manualCallbackMode: ManualCallbackMode
+  /** Body provider field for SDK redirect_url callback. */
+  sdkCallbackProvider?: string
 }
 
 const oauthProviders: OAuthProvider[] = [
-  { name: "Gemini CLI",        key: "gemini",       apiPath: "gemini-cli-auth-url",  callbackPath: "/google/callback", emoji: "🟦", color: "blue" },
-  { name: "Claude (Anthropic)", key: "anthropic",    apiPath: "anthropic-auth-url",   callbackPath: "/anthropic/callback", emoji: "🟧", color: "orange" },
-  { name: "Codex (OpenAI)",    key: "codex",        apiPath: "codex-auth-url",       callbackPath: "/codex/callback", emoji: "🟩", color: "green" },
-  { name: "Antigravity",       key: "antigravity",  apiPath: "antigravity-auth-url", callbackPath: "/antigravity/callback", emoji: "🟪", color: "purple" },
-  { name: "Kimi",              key: "kimi",         apiPath: "kimi-auth-url",        emoji: "🟫", color: "amber" },
+  {
+    name: "Gemini CLI",
+    key: "gemini",
+    apiPath: "gemini-cli-auth-url",
+    gatewayCallbackProvider: "gemini",
+    manualCallbackMode: "gateway",
+  },
+  {
+    name: "Claude (Anthropic)",
+    key: "anthropic",
+    apiPath: "anthropic-auth-url",
+    gatewayCallbackProvider: "claude",
+    manualCallbackMode: "gateway",
+  },
+  {
+    name: "Codex (OpenAI)",
+    key: "codex",
+    apiPath: "codex-auth-url",
+    gatewayCallbackProvider: "codex",
+    manualCallbackMode: "gateway",
+  },
+  {
+    name: "Antigravity",
+    key: "antigravity",
+    apiPath: "antigravity-auth-url",
+    manualCallbackMode: "sdk",
+    sdkCallbackProvider: "antigravity",
+  },
+  {
+    name: "Kimi",
+    key: "kimi",
+    apiPath: "kimi-auth-url",
+    manualCallbackMode: "none",
+  },
+  {
+    name: "xAI (Grok)",
+    key: "xai",
+    apiPath: "xai-auth-url",
+    gatewayCallbackProvider: "xai",
+    manualCallbackMode: "gateway",
+  },
 ]
 
 type OAuthSessionState = "idle" | "pending" | "polling" | "success" | "error"
@@ -51,6 +100,8 @@ export default function AdminProxyOAuthPage() {
   const [loading, setLoading] = useState(true)
   const [authFiles, setAuthFiles] = useState<AuthFile[]>([])
   const [sessions, setSessions] = useState<Record<string, ProviderSession>>({})
+  const [manualInputs, setManualInputs] = useState<Record<string, string>>({})
+  const [manualSubmitting, setManualSubmitting] = useState<Record<string, boolean>>({})
   const pollTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   // 清理轮询定时器
@@ -64,7 +115,7 @@ export default function AdminProxyOAuthPage() {
   // 加载已有的 auth files（凭证文件），按 provider 分组展示状态
   const loadAuthFiles = useCallback(async () => {
     try {
-      const res = await fetchMgmtApi("/auth-files")
+      const res = await fetchProviderConfig<{ files?: AuthFile[] }>("/auth-files")
       const files: AuthFile[] = res?.files || []
       setAuthFiles(files)
     } catch {
@@ -94,8 +145,13 @@ export default function AdminProxyOAuthPage() {
     }))
 
     try {
-      const data = await fetchMgmtApi(`/${provider.apiPath}?is_webui=true`)
-      const authURL = data?.url || data?.data?.url
+      const data = await postProviderConfig<{
+        url?: string
+        auth_url?: string
+        state?: string
+        data?: { url?: string; state?: string }
+      }>(`/${provider.apiPath}?is_webui=true`)
+      const authURL = data?.url || data?.auth_url || data?.data?.url
       const oauthState = data?.state || data?.data?.state
 
       if (!authURL) {
@@ -153,7 +209,7 @@ export default function AdminProxyOAuthPage() {
       }
 
       try {
-        const data = await fetchMgmtApi(`/get-auth-status?state=${encodeURIComponent(state)}`)
+        const data = await fetchProviderConfig<{ status?: string; error?: string }>(`/get-auth-status?state=${encodeURIComponent(state)}`)
         const status = data?.status
 
         if (status === "wait") {
@@ -248,6 +304,75 @@ export default function AdminProxyOAuthPage() {
   }
 
   // 取消/重置某个 provider 的 session
+  const submitManualCallback = async (provider: OAuthProvider) => {
+    if (provider.manualCallbackMode === 'none') return
+
+    const rawInput = (manualInputs[provider.key] || '').trim()
+    if (!rawInput) {
+      toast.warning('请粘贴浏览器授权完成后的回调地址或 code/state 参数')
+      return
+    }
+
+    const session = sessions[provider.key]
+    const parsed = parseOAuthCallbackInput(rawInput, {
+      sessionState: session?.oauthState,
+      isXai: provider.key === 'xai',
+    })
+
+    if (parsed.error) {
+      toast.error(`授权失败：${parsed.error}`)
+      return
+    }
+
+    setManualSubmitting((prev) => ({ ...prev, [provider.key]: true }))
+    try {
+      if (provider.manualCallbackMode === 'sdk') {
+        const redirectUrl =
+          parsed.redirectUrl ||
+          (parsed.code && parsed.state
+            ? `http://127.0.0.1/?code=${encodeURIComponent(parsed.code)}&state=${encodeURIComponent(parsed.state)}`
+            : null)
+        if (!redirectUrl) {
+          toast.warning('无法解析回调内容，请粘贴完整回调 URL')
+          return
+        }
+        await submitSdkOAuthCallback({
+          provider: provider.sdkCallbackProvider || provider.key,
+          redirect_url: redirectUrl,
+        })
+      } else {
+        const code = parsed.code?.trim()
+        const state = (parsed.state || session?.oauthState || '').trim()
+        if (!code || !state) {
+          toast.warning(
+            provider.key === 'xai'
+              ? '请粘贴含 code 的回调内容，并先发起 OAuth 以获取 state'
+              : '请粘贴包含 code 与 state 的完整回调 URL'
+          )
+          return
+        }
+        await submitGatewayOAuthCallback(provider.gatewayCallbackProvider || provider.key, {
+          code,
+          state,
+        })
+      }
+
+      toast.success(`${provider.name} 手动回填已提交，正在完成认证…`)
+      setManualInputs((prev) => ({ ...prev, [provider.key]: '' }))
+
+      if (session?.oauthState) {
+        pollOAuthStatus(provider, session.oauthState)
+      } else {
+        pollAuthFilesForCompletion(provider)
+      }
+      await loadAuthFiles()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : '手动回填失败')
+    } finally {
+      setManualSubmitting((prev) => ({ ...prev, [provider.key]: false }))
+    }
+  }
+
   const resetSession = (key: string) => {
     if (pollTimerRef.current[key]) {
       clearTimeout(pollTimerRef.current[key])
@@ -284,18 +409,20 @@ export default function AdminProxyOAuthPage() {
                 {/* Header */}
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-xl flex items-center justify-center text-lg ${
-                      hasCredentials
-                        ? 'bg-primary-50 dark:bg-primary-900/30'
-                        : 'bg-gray-100 dark:bg-dark-800'
-                    }`}>
-                      {provider.emoji}
+                    <div
+                      className={cn(
+                        'h-10 w-10 rounded-xl flex items-center justify-center shrink-0',
+                        hasCredentials
+                          ? 'bg-primary-50 dark:bg-primary-900/30'
+                          : 'bg-gray-100 dark:bg-dark-800'
+                      )}
+                    >
+                      <OAuthProviderBrandIcon providerKey={provider.key} size={24} />
                     </div>
                     <div>
                       <h3 className="text-base font-bold text-gray-900 dark:text-white">
                         {provider.name}
                       </h3>
-                      <p className="text-xs text-gray-400">{provider.callbackPath || 'device flow'}</p>
                     </div>
                   </div>
                 </div>
@@ -318,22 +445,60 @@ export default function AdminProxyOAuthPage() {
                       </span>
                     )}
                   </div>
-                  {providerFiles.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {providerFiles.slice(0, 3).map((f, i) => (
-                        <div key={i} className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 truncate">
-                          <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${
-                            f.disabled ? 'bg-red-400' : f.status === 'error' ? 'bg-yellow-400' : 'bg-green-400'
-                          }`} />
-                          <span className="truncate">{f.email || f.label || f.name}</span>
-                        </div>
-                      ))}
-                      {providerFiles.length > 3 && (
-                        <p className="text-xs text-gray-400">+{providerFiles.length - 3} 个更多凭证...</p>
-                      )}
-                    </div>
-                  )}
                 </div>
+
+                {provider.manualCallbackMode !== 'none' ? (
+                  <details className="mb-4 group rounded-lg border border-dashed border-gray-200 dark:border-dark-700 bg-white/60 dark:bg-dark-900/30">
+                    <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1.5 select-none">
+                      <ClipboardPaste className="h-3.5 w-3.5 shrink-0 text-primary-500" />
+                      <span>无法自动回调？手动粘贴授权结果</span>
+                    </summary>
+                    <div className="px-3 pb-3 space-y-2 border-t border-gray-100 dark:border-dark-700 pt-2">
+                      <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                        {provider.manualCallbackMode === 'sdk'
+                          ? '在浏览器完成登录后，将地址栏完整回调 URL 粘贴到下方。'
+                          : provider.key === 'xai'
+                            ? '先点击「发起 OAuth 登录」，再将回调页中的 code 或完整 URL 粘贴到下方。'
+                            : '先发起 OAuth，再将浏览器跳转后的完整回调 URL（含 code 与 state）粘贴到下方。'}
+                      </p>
+                      <Input
+                        value={manualInputs[provider.key] || ''}
+                        onChange={(e) =>
+                          setManualInputs((prev) => ({
+                            ...prev,
+                            [provider.key]: e.target.value,
+                          }))
+                        }
+                        placeholder={
+                          provider.key === 'xai'
+                            ? 'http://127.0.0.1:56121/callback?code=...&state=...'
+                            : 'https://.../callback?code=...&state=...'
+                        }
+                        className="text-xs h-9 font-mono"
+                        disabled={Boolean(manualSubmitting[provider.key])}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void submitManualCallback(provider)}
+                        disabled={Boolean(manualSubmitting[provider.key])}
+                        className="btn btn-sm w-full bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-dark-800 dark:text-gray-300 dark:hover:bg-dark-700"
+                      >
+                        {manualSubmitting[provider.key] ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                            提交中…
+                          </>
+                        ) : (
+                          '提交手动回填'
+                        )}
+                      </button>
+                    </div>
+                  </details>
+                ) : (
+                  <p className="mb-4 text-[11px] text-gray-400 dark:text-gray-500">
+                    Kimi 使用设备码流程，请在弹窗中完成授权，无需手动回填。
+                  </p>
+                )}
 
                 {/* Session 状态 / 操作按钮 */}
                 <div className="mt-auto">

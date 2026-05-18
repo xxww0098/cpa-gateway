@@ -9,7 +9,31 @@ type BalanceLog struct {
 	Amount    float64   `gorm:"not null"`
 	Type      string    `gorm:"size=32;not null"` // e.g. "precharge", "settle", "refund"
 	Reference string    `gorm:"size=255"`         // external reference id
+	Metadata  []byte    `gorm:"type:jsonb"`       // JSON operation context
 	CreatedAt time.Time `gorm:"autoCreateTime"`
+}
+
+// OperationLog records panel-side operations (login/register/admin CRUD)
+// that don't belong to UsageLog (/v1/* traffic) or BalanceLog (ledger movements).
+//
+// Source distinguishes 二次开发 (panel) entries from future external sources;
+// the unified /admin/audit-logs endpoint joins panel + sdk (UsageLog) + balance
+// (BalanceLog) into a single feed for the admin operations console.
+type OperationLog struct {
+	ID         uint      `gorm:"primaryKey"`
+	Source     string    `gorm:"size=16;not null;index"` // "panel"
+	ActorID    uint      `gorm:"index"`                  // 0 when unauthenticated (login fail, register)
+	ActorEmail string    `gorm:"size=255;index"`
+	ActorRole  string    `gorm:"size=32"`
+	Action     string    `gorm:"size=64;not null;index"` // e.g. "auth.login", "admin.user.update"
+	Target     string    `gorm:"size=255;index"`         // human-readable target ("user:42", "model:gpt-4o")
+	Method     string    `gorm:"size=8"`
+	Path       string    `gorm:"size=255"`
+	StatusCode int       `gorm:"default:0;index"`
+	IPAddress  string    `gorm:"size=64"`
+	RequestID  string    `gorm:"size=128;index"`
+	Metadata   []byte    `gorm:"type:jsonb"` // free-form context (reason, before/after, etc.)
+	CreatedAt  time.Time `gorm:"autoCreateTime;index"`
 }
 
 // UsageLog records every AI proxy request.

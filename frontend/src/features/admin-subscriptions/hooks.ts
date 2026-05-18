@@ -1,7 +1,24 @@
-import { useState, useEffect, useCallback } from "react"
-import { fetchApi } from "@/shared/api/client"
+import { useState } from "react"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/shared/api/query-keys"
+import { errorMessage } from "@/shared/api/errors"
 import { toast } from "sonner"
-import type { Subscription, Group } from "./types"
+import type { Group } from "./types"
+import {
+  fetchSubscriptions,
+  fetchGroups,
+  extendSubscription,
+  revokeSubscription,
+  reactivateSubscription,
+  reactivateSubscriptionFallback,
+  resetSubscriptionQuota,
+  assignSubscription,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+} from "./api"
+
+// ── Subscriptions Hook ──────────────────────────────────────────────────────
 
 interface UseSubscriptionsOptions {
   pageSize?: number
@@ -9,68 +26,58 @@ interface UseSubscriptionsOptions {
 
 export function useSubscriptions(opts: UseSubscriptionsOptions = {}) {
   const { pageSize = 20 } = opts
-  const [subs, setSubs] = useState<Subscription[]>([])
-  const [groups, setGroups] = useState<Group[]>([])
-  const [loading, setLoading] = useState(true)
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const qc = useQueryClient()
 
-  const loadData = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true)
-    try {
-      const [subsRes, groupsRes] = await Promise.all([
-        fetchApi(`/admin/subscriptions?page=${page}&page_size=${pageSize}`),
-        fetchApi(`/admin/groups`),
-      ])
-      setSubs(subsRes.data.items || [])
-      setTotal(subsRes.data.total || 0)
-      setGroups((groupsRes.data || []).filter((g: Group) => g.subscription_type === "subscription"))
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [page, pageSize])
+  const subsQuery = useQuery({
+    queryKey: queryKeys.subscriptions.list({ page, pageSize }),
+    queryFn: () => fetchSubscriptions(page, pageSize),
+  })
 
-  useEffect(() => { loadData() }, [loadData])
+  const groupsQuery = useQuery({
+    queryKey: queryKeys.groups.list(),
+    queryFn: fetchGroups,
+    select: (data) => (data || []).filter((g: Group) => g.subscription_type === "subscription"),
+  })
+
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all() })
+    qc.invalidateQueries({ queryKey: queryKeys.groups.all() })
+  }
 
   const handleExtend = async (id: number, days: number) => {
     try {
-      await fetchApi(`/admin/subscriptions/${id}/extend`, {
-        method: "PUT",
-        body: JSON.stringify({ days }),
-      })
+      await extendSubscription(id, days)
       toast.success("续期成功")
-      loadData(true)
+      invalidateAll()
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "续期失败")
+      toast.error(errorMessage(err, "续期失败"))
     }
   }
 
   const handleRevoke = async (id: number) => {
     try {
-      await fetchApi(`/admin/subscriptions/${id}`, { method: "DELETE" })
+      await revokeSubscription(id)
       toast.success("订阅已撤销")
-      loadData(true)
+      invalidateAll()
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "撤销失败")
+      toast.error(errorMessage(err, "撤销失败"))
     }
   }
 
   const handleReactivate = async (id: number) => {
-    const path = `/admin/subscriptions/${id}/reactivate`
     const isNotFoundMsg = (m: string) => /^not\s*found$/i.test(m.trim())
     try {
-      await fetchApi(path, { method: "POST" })
+      await reactivateSubscription(id)
       toast.success("订阅已恢复")
-      loadData(true)
+      invalidateAll()
     } catch (errPost: unknown) {
       const msgPost = errPost instanceof Error ? errPost.message : ""
       if (isNotFoundMsg(msgPost)) {
         try {
-          await fetchApi(path, { method: "PUT" })
+          await reactivateSubscriptionFallback(id)
           toast.success("订阅已恢复")
-          loadData(true)
+          invalidateAll()
           return
         } catch (errPut: unknown) {
           const msgPut = errPut instanceof Error ? errPut.message : ""
@@ -88,32 +95,80 @@ export function useSubscriptions(opts: UseSubscriptionsOptions = {}) {
 
   const handleResetQuota = async (id: number) => {
     try {
-      await fetchApi(`/admin/subscriptions/${id}/reset-quota`, { method: "POST" })
+      await resetSubscriptionQuota(id)
       toast.success("配额已重置")
-      loadData(true)
+      invalidateAll()
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "重置失败")
+      toast.error(errorMessage(err, "重置失败"))
     }
   }
 
+  const subs = subsQuery.data?.items || []
+  const total = subsQuery.data?.total || 0
   const totalPages = Math.ceil(total / pageSize)
+  const loading = subsQuery.isLoading || groupsQuery.isLoading
 
   return {
     subs,
-    groups,
+    groups: groupsQuery.data || [],
     loading,
     total,
     page,
     setPage,
     totalPages,
-    reload: () => loadData(false),
-    loadData,
+    reload: invalidateAll,
+    loadData: invalidateAll,
     handleExtend,
     handleRevoke,
     handleReactivate,
     handleResetQuota,
   }
 }
+
+// ── Extend Subscription Mutation ────────────────────────────────────────────
+
+export function useExtendSubscription() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, days }: { id: number; days: number }) =>
+      extendSubscription(id, days),
+    onSuccess: () => {
+      toast.success("续期成功")
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all() })
+    },
+    onError: (err) => toast.error(errorMessage(err, "续期失败")),
+  })
+}
+
+// ── Revoke Subscription Mutation ────────────────────────────────────────────
+
+export function useRevokeSubscription() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => revokeSubscription(id),
+    onSuccess: () => {
+      toast.success("订阅已撤销")
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all() })
+    },
+    onError: (err) => toast.error(errorMessage(err, "撤销失败")),
+  })
+}
+
+// ── Assign Subscription Mutation ────────────────────────────────────────────
+
+export function useAssignSubscription() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => assignSubscription(body),
+    onSuccess: () => {
+      toast.success("订阅分配成功")
+      qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all() })
+    },
+    onError: (err) => toast.error(errorMessage(err, "分配失败")),
+  })
+}
+
+// ── Group CRUD Hook ─────────────────────────────────────────────────────────
 
 export function useGroupCrud(onSaved?: () => void | Promise<void>) {
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
@@ -128,6 +183,12 @@ export function useGroupCrud(onSaved?: () => void | Promise<void>) {
     subscription_price_usd: "",
   })
   const [savingGroup, setSavingGroup] = useState(false)
+  const qc = useQueryClient()
+
+  const invalidateGroups = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.groups.all() })
+    qc.invalidateQueries({ queryKey: queryKeys.subscriptions.all() })
+  }
 
   const openCreateGroup = () => {
     setEditingGroupId(null)
@@ -177,22 +238,17 @@ export function useGroupCrud(onSaved?: () => void | Promise<void>) {
       body.subscription_price_usd = !Number.isFinite(selfPrice) || selfPrice < 0 ? 0 : selfPrice
 
       if (editingGroupId) {
-        await fetchApi(`/admin/groups/${editingGroupId}`, {
-          method: "PUT",
-          body: JSON.stringify(body),
-        })
+        await updateGroup(editingGroupId, body)
         toast.success("订阅分组已更新")
       } else {
-        await fetchApi("/admin/groups", {
-          method: "POST",
-          body: JSON.stringify(body),
-        })
+        await createGroup(body)
         toast.success("订阅分组创建成功")
       }
+      invalidateGroups()
       await onSaved?.()
       setGroupDialogOpen(false)
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "保存失败")
+      toast.error(errorMessage(err, "保存失败"))
     } finally {
       setSavingGroup(false)
     }
@@ -201,11 +257,12 @@ export function useGroupCrud(onSaved?: () => void | Promise<void>) {
   const handleDeleteGroup = async (g: Group) => {
     if (!confirm(`确定删除订阅分组「${g.name}」？关联的订阅将失效。`)) return
     try {
-      await fetchApi(`/admin/groups/${g.id}`, { method: "DELETE" })
+      await deleteGroup(g.id)
       toast.success("分组已删除")
+      invalidateGroups()
       onSaved?.()
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "删除失败")
+      toast.error(errorMessage(err, "删除失败"))
     }
   }
 

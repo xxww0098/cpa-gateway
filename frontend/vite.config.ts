@@ -2,6 +2,7 @@
 import path from "path"
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import { manualChunks } from './src/shared/build/manualChunks'
 
 const BACKEND = 'http://127.0.0.1:8888'
 
@@ -20,30 +21,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks(id) {
-          if (id.includes('/node_modules/react') || id.includes('/node_modules/react-dom') || id.includes('/node_modules/react-router-dom')) {
-            return 'react'
-          }
-          if (id.includes('/node_modules/recharts')) {
-            return 'charts'
-          }
-          if (id.includes('/node_modules/@radix-ui')) {
-            return 'radix'
-          }
-          if (id.includes('/node_modules/@stripe')) {
-            return 'payments'
-          }
-          if (id.includes('/node_modules/zod')) {
-            return 'validation'
-          }
-          if (id.includes('/node_modules/react-hook-form')) {
-            return 'forms'
-          }
-          if (id.includes('/node_modules/lucide-react')) {
-            return 'icons'
-          }
-          return undefined
-        },
+        manualChunks,
       },
     },
   },

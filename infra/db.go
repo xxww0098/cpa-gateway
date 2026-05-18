@@ -45,6 +45,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Group{},
 		&model.BalanceLog{},
 		&model.UsageLog{},
+		&model.OperationLog{},
 		&model.SubscriptionPackage{},
 		&model.Subscription{},
 		&model.Ticket{},

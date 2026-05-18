@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	sdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
@@ -171,6 +172,7 @@ func (pr *PanelRouter) RegisterSDKManagementRoutes(rg *gin.RouterGroup) {
 	rg.GET("/oauth-sessions", pr.SDKMgmtOAuthSessionsHandler)
 	rg.GET("/get-auth-status", pr.SDKMgmtOAuthStatusHandler)
 
+	rg.POST("/oauth-callback", pr.SDKMgmtSDKOAuthCallbackHandler)
 	rg.POST("/oauth-callback/:provider", pr.SDKMgmtOAuthCallbackHandler)
 
 	rg.GET("/ampcode", pr.SDKMgmtAmpcodeGetHandler)
@@ -240,6 +242,11 @@ func (pr *PanelRouter) SDKMgmtProviderGetHandler(c *gin.Context) {
 	if !pr.requireAdmin(c) {
 		return
 	}
+	provider := c.Param("provider")
+	if strings.HasSuffix(provider, "-auth-url") {
+		pr.sdkMgmtHandleAuthURLEndpoint(c, provider)
+		return
+	}
 	endpoint, provider, ok := pr.sdkMgmtProviderFromRequest(c)
 	if !ok {
 		return
@@ -259,7 +266,7 @@ func (pr *PanelRouter) SDKMgmtProviderPostHandler(c *gin.Context) {
 	// POST /:provider with -auth-url suffix → OAuth URL generation (single-route
 	// dispatch avoids Gin parameter conflict between /:provider and /:provider-auth-url).
 	if strings.HasSuffix(provider, "-auth-url") {
-		pr.sdkMgmtOAuthAuthURLHandler(c, provider)
+		pr.sdkMgmtHandleAuthURLEndpoint(c, provider)
 		return
 	}
 	_, sdkProvider, ok := pr.sdkMgmtProviderFromRequest(c)
@@ -401,6 +408,29 @@ func (pr *PanelRouter) sdkMgmtProviderFromRequest(c *gin.Context) (string, strin
 		return "", "", false
 	}
 	return endpoint, provider, true
+}
+
+func (pr *PanelRouter) sdkMgmtHandleAuthURLEndpoint(c *gin.Context, endpoint string) {
+	if pr.sdkMgmtTryDelegatedAuthURL(c, endpoint) {
+		return
+	}
+	pr.sdkMgmtOAuthAuthURLHandler(c, endpoint)
+}
+
+func (pr *PanelRouter) sdkMgmtTryDelegatedAuthURL(c *gin.Context, endpoint string) bool {
+	if pr.OAuthTokenRequester == nil {
+		return false
+	}
+	switch endpoint {
+	case "antigravity-auth-url":
+		pr.OAuthTokenRequester.RequestAntigravityToken(c)
+		return true
+	case "kimi-auth-url":
+		pr.OAuthTokenRequester.RequestKimiToken(c)
+		return true
+	default:
+		return false
+	}
 }
 
 func (pr *PanelRouter) sdkMgmtAuthURLProviderSupported(c *gin.Context, authURLProvider string) bool {
@@ -1552,6 +1582,19 @@ func (pr *PanelRouter) SDKMgmtOAuthSessionsHandler(c *gin.Context) {
 	Success(c, gin.H{"sessions": items})
 }
 
+// SDKMgmtSDKOAuthCallbackHandler forwards manual OAuth callback payloads to the
+// embedded CLIProxyAPI management handler (redirect_url flow for antigravity, etc.).
+func (pr *PanelRouter) SDKMgmtSDKOAuthCallbackHandler(c *gin.Context) {
+	if !pr.requireAdmin(c) {
+		return
+	}
+	if pr.OAuthTokenRequester == nil {
+		Error(c, http.StatusServiceUnavailable, 5031, "SDK OAuth callback is not available")
+		return
+	}
+	pr.OAuthTokenRequester.PostOAuthCallback(c)
+}
+
 func (pr *PanelRouter) SDKMgmtOAuthCallbackHandler(c *gin.Context) {
 	if !pr.requireAdmin(c) {
 		return
@@ -1610,6 +1653,9 @@ func (pr *PanelRouter) SDKMgmtOAuthStatusHandler(c *gin.Context) {
 	err := pr.DB.WithContext(c.Request.Context()).Where("state = ?", state).First(&session).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
+			if pr.sdkMgmtRespondSDKOAuthStatus(c, state) {
+				return
+			}
 			Success(c, gin.H{"status": "missing"})
 			return
 		}
@@ -1629,6 +1675,23 @@ func (pr *PanelRouter) SDKMgmtOAuthStatusHandler(c *gin.Context) {
 	default:
 		Success(c, gin.H{"status": "wait", "provider": session.Provider})
 	}
+}
+
+func (pr *PanelRouter) sdkMgmtRespondSDKOAuthStatus(c *gin.Context, state string) bool {
+	if err := sdkapi.ValidateOAuthState(state); err != nil {
+		return false
+	}
+	_, status, ok := sdkapi.GetOAuthSession(state)
+	if !ok {
+		Success(c, gin.H{"status": "ok"})
+		return true
+	}
+	if strings.TrimSpace(status) != "" {
+		Success(c, gin.H{"status": "error", "error": status})
+		return true
+	}
+	Success(c, gin.H{"status": "wait"})
+	return true
 }
 
 func (pr *PanelRouter) sdkMgmtOAuthDBReady(c *gin.Context) bool {

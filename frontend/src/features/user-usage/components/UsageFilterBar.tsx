@@ -1,7 +1,8 @@
+import { memo } from 'react'
 import { Search, RefreshCw, Download, X } from 'lucide-react'
 import type { UsageFilterBarProps } from '../types'
 
-export function UsageFilterBar({
+export const UsageFilterBar = memo(function UsageFilterBar({
   apiKeys,
   filterKeyId,
   onFilterKeyIdChange,
@@ -108,4 +109,4 @@ export function UsageFilterBar({
       </div>
     </div>
   )
-}
+})

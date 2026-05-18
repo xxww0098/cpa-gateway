@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { Layers, X } from "lucide-react"
-import { fetchApi } from "@/shared/api/client"
+import { errorMessage } from "@/shared/api/errors"
 import { toast } from "sonner"
 import type { ApiKey, ModelInfo } from "../types"
+import { fetchKeyModels } from "../api"
 
 interface Props {
   key_: ApiKey
@@ -18,9 +19,9 @@ export function ModelListDialog({ key_ }: Props) {
     if (!open) return
     setLoading(true)
     setModels([])
-    fetchApi(`/user/models?key_id=${key_.id}`)
-      .then(res => setModels(res.data.models || []))
-      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "无法加载可用模型"))
+    fetchKeyModels(key_.id)
+      .then(res => setModels(res.models || []))
+      .catch((err: unknown) => toast.error(errorMessage(err, "无法加载可用模型")))
       .finally(() => setLoading(false))
   }, [open, key_.id])
 

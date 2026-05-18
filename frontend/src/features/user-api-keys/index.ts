@@ -1,5 +1,6 @@
 // User API keys feature exports
 export * from "./types"
+export * from "./api"
 export * from "./hooks"
 export { ApiKeyStatusBadge } from "./components/ApiKeyStatusBadge"
 export { CreateApiKeyDialog } from "./components/CreateApiKeyDialog"

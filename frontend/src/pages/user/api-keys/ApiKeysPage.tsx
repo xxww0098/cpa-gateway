@@ -1,4 +1,3 @@
-import { useEffect } from "react"
 import { useApiKeys, CreateApiKeyDialog, ApiKeysTable, NeedSubscriptionDialog } from "@/features/user-api-keys"
 
 export default function Keys() {
@@ -11,16 +10,11 @@ export default function Keys() {
     rebindingId,
     needSubDialog,
     setNeedSubDialog,
-    loadKeys,
     handleCreate,
     handleDelete,
     handleCopy,
     handleRebindGroup,
   } = useApiKeys()
-
-  useEffect(() => {
-    loadKeys()
-  }, [loadKeys])
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500" style={{ willChange: 'transform, opacity' }}>
@@ -30,7 +24,7 @@ export default function Keys() {
           <p className="text-gray-500 dark:text-dark-300 mt-1">管理您用于访问接口的身份凭证及用量限制。</p>
         </div>
 
-        <CreateApiKeyDialog onCreate={handleCreate} />
+        <CreateApiKeyDialog onCreate={handleCreate} groups={groups} groupsLoading={groupsLoading} />
       </div>
 
       <ApiKeysTable

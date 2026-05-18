@@ -22,11 +22,16 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// GenerateJWT creates an HS256-signed JWT with 15-minute expiry.
+// GenerateJWT creates an HS256-signed JWT with a configurable expiry.
+// If expiryHours <= 0, it defaults to 24 hours.
 // The userID and email are embedded in the claims. The secret must be non-empty.
-func GenerateJWT(userID uint, email string, secret string) (string, error) {
+func GenerateJWT(userID uint, email string, secret string, expiryHours int) (string, error) {
 	if secret == "" {
 		return "", errors.New("JWT secret not configured")
+	}
+
+	if expiryHours <= 0 {
+		expiryHours = 24
 	}
 
 	now := time.Now()
@@ -34,7 +39,7 @@ func GenerateJWT(userID uint, email string, secret string) (string, error) {
 		UserID: userID,
 		Email:  email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Duration(expiryHours) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    "cpa-gateway",

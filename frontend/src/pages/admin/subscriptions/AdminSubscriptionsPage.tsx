@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { Button } from "@/shared/components/ui/button"
 import { Card, CardContent } from "@/shared/components/ui/card"
 import { Crown, PackagePlus } from "lucide-react"
@@ -23,11 +23,11 @@ export default function Subscriptions() {
   const [extendId, setExtendId] = useState(0)
   const [extendDays, setExtendDays] = useState("30")
 
-  const handleExtendClick = (id: number) => {
+  const handleExtendClick = useCallback((id: number) => {
     setExtendId(id)
     setExtendDays("30")
     setExtendOpen(true)
-  }
+  }, [])
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500" style={{ willChange: 'transform, opacity' }}>

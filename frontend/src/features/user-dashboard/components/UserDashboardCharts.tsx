@@ -1,7 +1,7 @@
 import { TrendingUp, Flame } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, PieChart, Pie, Cell
+  ResponsiveContainer, PieChart, Pie
 } from 'recharts'
 import type { UserDashboardChartsProps, ModelStat } from '../types'
 
@@ -33,6 +33,8 @@ function CustomAreaTooltip({ active, payload, label }: { active?: boolean; paylo
     </div>
   )
 }
+
+const cellClassName = "transition-opacity duration-200 hover:opacity-80 cursor-pointer"
 
 function CustomDoughnutTooltip({ active, payload }: { active?: boolean; payload?: Array<{ name: string; value: number; payload: ModelStat }> }) {
   if (!active || !payload?.length) return null
@@ -148,11 +150,21 @@ export function UserDashboardCharts({
               <div className="relative w-[180px] h-[180px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={modelData.slice(0, 8)} dataKey="cost" nameKey="model" cx="50%" cy="50%" innerRadius={52} outerRadius={80} paddingAngle={2} strokeWidth={0}>
-                      {modelData.slice(0, 8).map((_, index) => (
-                        <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} className="transition-opacity duration-200 hover:opacity-80 cursor-pointer" />
-                      ))}
-                    </Pie>
+                    <Pie
+                      data={modelData.slice(0, 8).map((entry, index) => ({
+                        ...entry,
+                        fill: CHART_COLORS[index % CHART_COLORS.length],
+                        className: cellClassName,
+                      }))}
+                      dataKey="cost"
+                      nameKey="model"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={52}
+                      outerRadius={80}
+                      paddingAngle={2}
+                      strokeWidth={0}
+                    />
                     <RechartsTooltip content={<CustomDoughnutTooltip />} />
                   </PieChart>
                 </ResponsiveContainer>

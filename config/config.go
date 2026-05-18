@@ -16,12 +16,14 @@ import (
 
 // Config holds all configuration sections.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Redis    RedisConfig    `yaml:"redis"`
-	SDK      SDKConfig      `yaml:"sdk"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Billing  BillingConfig  `yaml:"billing"`
+	Server         ServerConfig         `yaml:"server"`
+	Database       DatabaseConfig       `yaml:"database"`
+	Redis          RedisConfig          `yaml:"redis"`
+	SDK            SDKConfig            `yaml:"sdk"`
+	Auth           AuthConfig           `yaml:"auth"`
+	Billing        BillingConfig        `yaml:"billing"`
+	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -118,8 +120,11 @@ func (p SDKProviderConfig) Complete() bool {
 
 // AuthConfig holds authentication settings.
 type AuthConfig struct {
-	JWT         JWTConfig `yaml:"jwt"`
-	AdminEmails []string  `yaml:"admin_emails"`
+	JWT JWTConfig `yaml:"jwt"`
+	// AdminEmails is retained for backward-compatible config parsing only.
+	// Runtime admin authorization is stored in users.role and never granted by
+	// matching an email claim or public registration input.
+	AdminEmails []string `yaml:"admin_emails"`
 }
 
 // JWTConfig holds JWT-specific settings.
@@ -133,6 +138,38 @@ type BillingConfig struct {
 	HoldAmount              int     `yaml:"hold_amount"`
 	DefaultPricePer1KTokens float64 `yaml:"default_price_per_1k_tokens"`
 	HoldTTLSeconds          int     `yaml:"hold_ttl_seconds"`
+	BalanceCacheTTLSeconds  int     `yaml:"balance_cache_ttl_seconds"`  // default: 30
+	BudgetTokenMultiplier   int     `yaml:"budget_token_multiplier"`    // default: 10
+	BudgetTokenTTLSeconds   int     `yaml:"budget_token_ttl_seconds"`   // default: 60
+	LowBalanceThresholdUSD  float64 `yaml:"low_balance_threshold_usd"`  // default: 1.0
+	StrictUsageMetadataMode bool    `yaml:"strict_usage_metadata_mode"` // default: false (conservative fallback settlement)
+}
+
+// RateLimitOverride holds per-group rate limit overrides.
+type RateLimitOverride struct {
+	RequestsPerMin int   `yaml:"requests_per_min"`
+	TokensPerMin   int64 `yaml:"tokens_per_min"`
+	MaxConcurrent  int   `yaml:"max_concurrent"`
+	BurstSize      int   `yaml:"burst_size"`
+}
+
+// RateLimitConfig holds rate limiting settings.
+type RateLimitConfig struct {
+	RequestsPerMin   int                          `yaml:"requests_per_min"`   // default: 60
+	TokensPerMin     int64                        `yaml:"tokens_per_min"`     // default: 100000
+	MaxConcurrent    int                          `yaml:"max_concurrent"`     // default: 10
+	BurstSize        int                          `yaml:"burst_size"`         // default: 2
+	GlobalRequestCap int                          `yaml:"global_request_cap"` // default: 10000
+	GlobalTokenCap   int64                        `yaml:"global_token_cap"`   // default: 10000000
+	GroupOverrides   map[string]RateLimitOverride `yaml:"group_overrides"`
+	ModelTokenLimits map[string]int64             `yaml:"model_token_limits"`
+}
+
+// CircuitBreakerConfig holds circuit breaker settings.
+type CircuitBreakerConfig struct {
+	FailureThreshold float64 `yaml:"failure_threshold"` // default: 0.5
+	WindowSeconds    int     `yaml:"window_seconds"`    // default: 30
+	CooldownSeconds  int     `yaml:"cooldown_seconds"`  // default: 30
 }
 
 // Load reads a YAML config file and applies environment overrides.
@@ -159,9 +196,10 @@ func Load(path string) (*Config, error) {
 //   - DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE: database
 //   - REDIS_ADDR, REDIS_PASSWORD, REDIS_DB: redis
 //   - JWT_SECRET, JWT_EXPIRY_HOURS: auth.jwt
-//   - ADMIN_EMAILS: auth.admin_emails (comma-separated)
+//   - ADMIN_EMAILS: auth.admin_emails (comma-separated, legacy/non-authorizing)
 //   - SDK_BASE_URL, SDK_API_KEY, SDK_TIMEOUT_SECONDS: sdk
 //   - BILLING_HOLD_AMOUNT, BILLING_DEFAULT_PRICE_PER_1K_TOKENS, BILLING_HOLD_TTL_SECONDS: billing
+//   - BILLING_STRICT_USAGE_METADATA_MODE: billing (bool, default false)
 func applyEnvOverrides(cfg *Config) {
 	// Server
 	if v := os.Getenv("SERVER_PORT"); v != "" {
@@ -252,6 +290,80 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("BILLING_HOLD_TTL_SECONDS"); v != "" {
 		if ttl, err := strconv.Atoi(v); err == nil {
 			cfg.Billing.HoldTTLSeconds = ttl
+		}
+	}
+	if v := os.Getenv("BILLING_BALANCE_CACHE_TTL_SECONDS"); v != "" {
+		if ttl, err := strconv.Atoi(v); err == nil {
+			cfg.Billing.BalanceCacheTTLSeconds = ttl
+		}
+	}
+	if v := os.Getenv("BILLING_BUDGET_TOKEN_MULTIPLIER"); v != "" {
+		if mult, err := strconv.Atoi(v); err == nil {
+			cfg.Billing.BudgetTokenMultiplier = mult
+		}
+	}
+	if v := os.Getenv("BILLING_BUDGET_TOKEN_TTL_SECONDS"); v != "" {
+		if ttl, err := strconv.Atoi(v); err == nil {
+			cfg.Billing.BudgetTokenTTLSeconds = ttl
+		}
+	}
+	if v := os.Getenv("BILLING_LOW_BALANCE_THRESHOLD_USD"); v != "" {
+		if threshold, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Billing.LowBalanceThresholdUSD = threshold
+		}
+	}
+	if v := os.Getenv("BILLING_STRICT_USAGE_METADATA_MODE"); v != "" {
+		if strict, err := strconv.ParseBool(v); err == nil {
+			cfg.Billing.StrictUsageMetadataMode = strict
+		}
+	}
+
+	// Rate Limit
+	if v := os.Getenv("RATE_LIMIT_REQUESTS_PER_MIN"); v != "" {
+		if rpm, err := strconv.Atoi(v); err == nil {
+			cfg.RateLimit.RequestsPerMin = rpm
+		}
+	}
+	if v := os.Getenv("RATE_LIMIT_TOKENS_PER_MIN"); v != "" {
+		if tpm, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.RateLimit.TokensPerMin = tpm
+		}
+	}
+	if v := os.Getenv("RATE_LIMIT_MAX_CONCURRENT"); v != "" {
+		if mc, err := strconv.Atoi(v); err == nil {
+			cfg.RateLimit.MaxConcurrent = mc
+		}
+	}
+	if v := os.Getenv("RATE_LIMIT_BURST_SIZE"); v != "" {
+		if bs, err := strconv.Atoi(v); err == nil {
+			cfg.RateLimit.BurstSize = bs
+		}
+	}
+	if v := os.Getenv("RATE_LIMIT_GLOBAL_REQUEST_CAP"); v != "" {
+		if cap, err := strconv.Atoi(v); err == nil {
+			cfg.RateLimit.GlobalRequestCap = cap
+		}
+	}
+	if v := os.Getenv("RATE_LIMIT_GLOBAL_TOKEN_CAP"); v != "" {
+		if cap, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.RateLimit.GlobalTokenCap = cap
+		}
+	}
+
+	// Circuit Breaker
+	if v := os.Getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD"); v != "" {
+		if ft, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.CircuitBreaker.FailureThreshold = ft
+		}
+	}
+	if v := os.Getenv("CIRCUIT_BREAKER_WINDOW_SECONDS"); v != "" {
+		if ws, err := strconv.Atoi(v); err == nil {
+			cfg.CircuitBreaker.WindowSeconds = ws
+		}
+	}
+	if v := os.Getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS"); v != "" {
+		if cs, err := strconv.Atoi(v); err == nil {
+			cfg.CircuitBreaker.CooldownSeconds = cs
 		}
 	}
 }

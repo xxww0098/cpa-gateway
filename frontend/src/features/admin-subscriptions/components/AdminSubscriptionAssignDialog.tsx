@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { fetchApi } from "@/shared/api/client"
+import { errorMessage } from "@/shared/api/errors"
 import { toast } from "sonner"
 import { Button } from "@/shared/components/ui/button"
 import { Input } from "@/shared/components/ui/input"
@@ -15,6 +15,7 @@ import {
 import { Plus } from "lucide-react"
 import { Label } from "@/shared/components/ui/label"
 import { SUBSCRIPTION_FUNDING_SOURCE_OPTIONS } from "../constants"
+import { assignSubscription } from "../api"
 import type { Group, AssignForm } from "../types"
 
 interface Props {
@@ -35,7 +36,7 @@ export function AdminSubscriptionAssignDialog({ groups, onAssigned }: Props) {
   })
   const [creating, setCreating] = useState(false)
 
-  const handleAssign = async (e: React.FormEvent) => {
+  const handleAssign = async (e: { preventDefault: () => void }) => {
     e.preventDefault()
     setCreating(true)
     try {
@@ -65,7 +66,7 @@ export function AdminSubscriptionAssignDialog({ groups, onAssigned }: Props) {
       if (form.funding_reference.trim()) body.funding_reference = form.funding_reference.trim()
       if (pricePaidUsd !== undefined) body.price_paid_usd = pricePaidUsd
 
-      await fetchApi("/admin/subscriptions", { method: "POST", body: JSON.stringify(body) })
+      await assignSubscription(body)
       toast.success("订阅分配成功")
       setOpen(false)
       setForm({
@@ -79,7 +80,7 @@ export function AdminSubscriptionAssignDialog({ groups, onAssigned }: Props) {
       })
       onAssigned()
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "分配失败")
+      toast.error(errorMessage(err, "分配失败"))
     } finally {
       setCreating(false)
     }

@@ -1,74 +1,67 @@
-import { useCallback, useEffect, useState } from "react"
-import { errorMessage, fetchApi } from "@/shared/api/client"
+import { useState } from "react"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/shared/api/query-keys"
+import { errorMessage } from "@/shared/api/errors"
 import { toast } from "sonner"
-import type { ApiKey, AvailableGroup, CreateKeyForm } from "./types"
+import type { CreateKeyForm, CreateKeyPayload } from "./types"
+import {
+  fetchApiKeys,
+  createApiKey,
+  deleteApiKey,
+  rebindApiKeyGroup,
+  fetchAvailableGroups,
+} from "./api"
 
-interface ApiKeyListResponse {
-  items: ApiKey[]
-}
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function isSubscriptionRequiredError(err: unknown): boolean {
   const msg = errorMessage(err, "")
   return msg.includes("需要先订阅该分组")
 }
 
+/** Converts the form values (strings) into a typed API payload */
+function buildCreatePayload(form: CreateKeyForm): CreateKeyPayload {
+  const payload: CreateKeyPayload = { name: form.name.trim() }
+  if (form.quota) payload.quota = parseFloat(form.quota)
+  if (form.rate_5h) payload.rate_limit_5h = parseFloat(form.rate_5h)
+  if (form.rate_1d) payload.rate_limit_1d = parseFloat(form.rate_1d)
+  if (form.rate_7d) payload.rate_limit_7d = parseFloat(form.rate_7d)
+  if (form.rate_30d) payload.rate_limit_30d = parseFloat(form.rate_30d)
+  if (form.group_id) payload.group_id = form.group_id
+  if (form.expires_in_days !== undefined) payload.expires_in_days = form.expires_in_days
+  return payload
+}
+
+// ── useApiKeys (main composite hook) ────────────────────────────────────────
+
 export function useApiKeys() {
-  const [keys, setKeys] = useState<ApiKey[]>([])
-  const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<number | null>(null)
-  const [groups, setGroups] = useState<AvailableGroup[]>([])
-  const [groupsLoading, setGroupsLoading] = useState(true)
   const [rebindingId, setRebindingId] = useState<number | null>(null)
   const [needSubDialog, setNeedSubDialog] = useState<{ open: boolean; groupName?: string }>({ open: false })
+  const qc = useQueryClient()
 
-  const loadKeys = useCallback(async () => {
-    try {
-      const res = await fetchApi("/user/api-keys") as { data?: ApiKeyListResponse }
-      setKeys(res.data?.items ?? [])
-    } catch (err: unknown) {
-      toast.error(errorMessage(err, "无法加载 API Keys"))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const keysQuery = useQuery({
+    queryKey: queryKeys.apiKeys.list(),
+    queryFn: fetchApiKeys,
+  })
 
-  const loadGroups = useCallback(async () => {
-    try {
-      const res = await fetchApi("/user/available-groups")
-      setGroups(res.data || [])
-    } catch {
-      // silent fail for groups
-    } finally {
-      setGroupsLoading(false)
-    }
-  }, [])
+  const groupsQuery = useQuery({
+    queryKey: queryKeys.groups.list(),
+    queryFn: fetchAvailableGroups,
+  })
 
-  useEffect(() => {
-    loadGroups()
-  }, [loadGroups])
+  const invalidateKeys = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.apiKeys.all() })
+  }
 
-  const handleCreate = async (
-    form: CreateKeyForm,
-    onSuccess: () => void
-  ) => {
+  const handleCreate = async (form: CreateKeyForm, onSuccess: () => void) => {
     if (!form.name.trim()) return
     try {
-      const payload: Record<string, string | number | null> = { name: form.name.trim() }
-      if (form.quota) payload.quota = parseFloat(form.quota)
-      if (form.rate_5h) payload.rate_limit_5h = parseFloat(form.rate_5h)
-      if (form.rate_1d) payload.rate_limit_1d = parseFloat(form.rate_1d)
-      if (form.rate_7d) payload.rate_limit_7d = parseFloat(form.rate_7d)
-      if (form.rate_30d) payload.rate_limit_30d = parseFloat(form.rate_30d)
-      if (form.group_id) payload.group_id = form.group_id
-      if (form.expires_in_days !== undefined) payload.expires_in_days = form.expires_in_days
-
-      await fetchApi("/user/api-keys", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      })
+      const payload = buildCreatePayload(form)
+      await createApiKey(payload)
       toast.success("成功创建 API Key")
       onSuccess()
-      await loadKeys()
+      invalidateKeys()
     } catch (err: unknown) {
       if (isSubscriptionRequiredError(err)) {
         const gid = form.group_id
@@ -83,9 +76,9 @@ export function useApiKeys() {
   const handleDelete = async (id: number) => {
     if (!confirm("确定要删除这个 API Key 吗？此操作不可撤销。")) return
     try {
-      await fetchApi(`/user/api-keys/${id}`, { method: "DELETE" })
+      await deleteApiKey(id)
       toast.success("API Key 已删除")
-      await loadKeys()
+      invalidateKeys()
     } catch (err: unknown) {
       toast.error(errorMessage(err, "删除失败"))
     }
@@ -101,12 +94,9 @@ export function useApiKeys() {
   const handleRebindGroup = async (keyId: number, groupId: number | null) => {
     setRebindingId(keyId)
     try {
-      await fetchApi(`/user/api-keys/${keyId}/group`, {
-        method: "PATCH",
-        body: JSON.stringify({ group_id: groupId }),
-      })
+      await rebindApiKeyGroup(keyId, groupId)
       toast.success(groupId ? "已切换分组" : "已解绑分组")
-      await loadKeys()
+      invalidateKeys()
     } catch (err: unknown) {
       if (isSubscriptionRequiredError(err)) {
         const gname = groupId != null ? groups.find((g) => g.id === groupId)?.name : undefined
@@ -119,6 +109,11 @@ export function useApiKeys() {
     }
   }
 
+  const keys = keysQuery.data?.items ?? []
+  const groups = groupsQuery.data ?? []
+  const loading = keysQuery.isLoading
+  const groupsLoading = groupsQuery.isLoading
+
   return {
     keys,
     loading,
@@ -128,10 +123,38 @@ export function useApiKeys() {
     rebindingId,
     needSubDialog,
     setNeedSubDialog,
-    loadKeys,
+    loadKeys: invalidateKeys,
     handleCreate,
     handleDelete,
     handleCopy,
     handleRebindGroup,
   }
+}
+
+// ── useCreateKey (standalone mutation hook) ─────────────────────────────────
+
+export function useCreateKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateKeyPayload) => createApiKey(payload),
+    onSuccess: () => {
+      toast.success("成功创建 API Key")
+      qc.invalidateQueries({ queryKey: queryKeys.apiKeys.all() })
+    },
+    onError: (err) => toast.error(errorMessage(err, "创建失败")),
+  })
+}
+
+// ── useDeleteKey (standalone mutation hook) ──────────────────────────────────
+
+export function useDeleteKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => deleteApiKey(id),
+    onSuccess: () => {
+      toast.success("API Key 已删除")
+      qc.invalidateQueries({ queryKey: queryKeys.apiKeys.all() })
+    },
+    onError: (err) => toast.error(errorMessage(err, "删除失败")),
+  })
 }

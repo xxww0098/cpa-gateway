@@ -316,6 +316,12 @@ func (e *GeminiExecutor) publishUsage(ctx context.Context, auth *cliproxyauth.Au
 			Body:       truncateGeminiFailureBody(payload),
 		}
 	}
+	// Propagate the "did we parse a terminal upstream usage envelope?" signal
+	// through the ctx the cliproxy manager hands to UsagePlugin.HandleUsage.
+	// Gemini's streamGenerateContent normally emits usageMetadata on the final
+	// chunk, so `parsed` is typically true — but we thread the parser's bool
+	// through unmodified (Requirement 1.1).
+	ctx = WithUsageDetailPresent(ctx, parsed)
 	cliproxyusage.PublishRecord(ctx, rec)
 }
 

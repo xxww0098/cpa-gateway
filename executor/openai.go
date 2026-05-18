@@ -196,6 +196,14 @@ func (e *OpenAICompatibleExecutor) doChatCompletionsRequest(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	// Streaming requests must request the terminal usage envelope so the
+	// UsagePlugin can settle on precise token counts instead of its fallback
+	// estimate. The helper verifies `stream=true` in the body itself before
+	// mutating, so a mis-set opts.Stream cannot force include_usage onto a
+	// non-streaming payload.
+	if opts.Stream {
+		req.Payload = EnsureIncludeUsage(req.Payload)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(req.Payload))
 	if err != nil {
 		return nil, err
@@ -291,6 +299,10 @@ func (e *OpenAICompatibleExecutor) publishUsage(ctx context.Context, auth *clipr
 			Body:       truncateOpenAIFailureBody(payload),
 		}
 	}
+	// Propagate the "did we parse a terminal upstream usage envelope?" signal
+	// through the ctx the cliproxy manager hands to UsagePlugin.HandleUsage.
+	// See executor.WithUsageDetailPresent / Requirement 1.1.
+	ctx = WithUsageDetailPresent(ctx, parsed)
 	cliproxyusage.PublishRecord(ctx, rec)
 }
 

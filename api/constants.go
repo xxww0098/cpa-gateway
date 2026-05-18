@@ -6,6 +6,7 @@ const (
 	userStatusActive      = "active"
 	apiErrorBadRequest    = 4000
 	apiErrorUnauthorized  = 4001
+	apiErrorForbidden     = 4003
 	apiErrorNotFound      = 4004
 	apiErrorConflict      = 4009
 	apiErrorInternal      = 5000

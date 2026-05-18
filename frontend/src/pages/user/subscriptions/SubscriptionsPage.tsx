@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
+import { useQueryClient } from "@tanstack/react-query"
 import { errorMessage, fetchApi } from "@/shared/api/client"
+import { queryKeys } from "@/shared/api/query-keys"
 import { useAuthStore } from "@/features/auth/auth_store"
 import { Card, CardContent } from "@/shared/components/ui/card"
 import { Badge } from "@/shared/components/ui/badge"
@@ -49,6 +51,7 @@ function selfServicePrice(pkg: SubscriptionPackage): number {
 }
 
 export default function Subscriptions() {
+  const queryClient = useQueryClient()
   const authBalance = useAuthStore((s) => s.user?.balance)
   const updateUser = useAuthStore((s) => s.updateUser)
   const [subs, setSubs] = useState<Subscription[]>([])
@@ -121,6 +124,9 @@ export default function Subscriptions() {
         setBalance(data.balance)
         updateUser({ balance: data.balance })
       }
+      // Invalidate the profile query so the Header (which displays
+      // available_balance from useProfile) refetches the latest balance.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.auth.profile() })
       setCheckoutPkg(null)
       await loadData()
     } catch (err: unknown) {

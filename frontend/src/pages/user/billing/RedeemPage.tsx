@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react"
 import { useAuthStore } from "@/features/auth/auth_store"
-import { fetchApi, refreshCurrentUser } from "@/shared/api/client"
+import { fetchApi } from "@/shared/api/client"
+import { useProfile } from "@/features/auth/hooks"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card"
 import { Button } from "@/shared/components/ui/button"
 import { Input } from "@/shared/components/ui/input"
@@ -14,14 +15,18 @@ export default function Redeem() {
   const user = useAuthStore(s => s.user)
   const [code, setCode] = useState("")
   const [loading, setLoading] = useState(false)
+  const { refetch: refetchProfile } = useProfile()
 
   const refreshBalance = useCallback(async () => {
     try {
-      await refreshCurrentUser()
+      const { data } = await refetchProfile()
+      if (data?.user) {
+        useAuthStore.getState().updateUser(data.user)
+      }
     } catch (err: unknown) {
       console.error("Refresh balance failed:", err)
     }
-  }, [])
+  }, [refetchProfile])
 
   const handleRedeem = async (e: React.FormEvent) => {
     e.preventDefault()

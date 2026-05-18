@@ -1,6 +1,3 @@
-import modelRegistry from '@/data/cliproxy-models-registry.json'
-import customModelRegistry from '@/data/cpa-models-registry.json'
-
 export interface ProviderAwareModel {
   id?: string
   owned_by?: string
@@ -36,18 +33,14 @@ function normalizeProvider(value?: string): string {
   return PROVIDER_ALIAS_MAP[lower] || lower
 }
 
-// Lazy-initialized maps — populated on first access to avoid module-level side effects
+// Lazy-initialized maps — populated on first access via async registry loading
 let _providerByModelId: Map<string, string> | null = null
 let _registryByModelId: Map<string, ProviderAwareModel> | null = null
+let _registryLoadPromise: Promise<void> | null = null
 
-function ensureMaps(): { providerByModelId: Map<string, string>; registryByModelId: Map<string, ProviderAwareModel> } {
-  if (_providerByModelId && _registryByModelId) {
-    return { providerByModelId: _providerByModelId, registryByModelId: _registryByModelId }
-  }
-
+function buildMapsFromRegistries(registries: ModelRegistry[]): void {
   const providerByModelId = new Map<string, string>()
   const registryByModelId = new Map<string, ProviderAwareModel>()
-  const registries = [modelRegistry, customModelRegistry] as ModelRegistry[]
 
   registries.forEach((registry) => {
     Object.values(registry).forEach((models) => {
@@ -66,7 +59,36 @@ function ensureMaps(): { providerByModelId: Map<string, string>; registryByModel
 
   _providerByModelId = providerByModelId
   _registryByModelId = registryByModelId
-  return { providerByModelId, registryByModelId }
+}
+
+/**
+ * Loads model registry JSON files asynchronously via dynamic import().
+ * Returns a promise that resolves once the maps are populated.
+ * Subsequent calls return the same promise (singleton).
+ */
+export function loadModelRegistries(): Promise<void> {
+  if (_providerByModelId && _registryByModelId) {
+    return Promise.resolve()
+  }
+  if (_registryLoadPromise) {
+    return _registryLoadPromise
+  }
+  _registryLoadPromise = Promise.all([
+    import('@/data/cliproxy-models-registry.json').then((m) => m.default as unknown as ModelRegistry),
+    import('@/data/cpa-models-registry.json').then((m) => m.default as unknown as ModelRegistry),
+  ]).then(([modelRegistry, customModelRegistry]) => {
+    buildMapsFromRegistries([modelRegistry, customModelRegistry])
+  })
+  return _registryLoadPromise
+}
+
+function ensureMaps(): { providerByModelId: Map<string, string>; registryByModelId: Map<string, ProviderAwareModel> } {
+  if (_providerByModelId && _registryByModelId) {
+    return { providerByModelId: _providerByModelId, registryByModelId: _registryByModelId }
+  }
+  // Fallback: return empty maps if registries haven't loaded yet.
+  // Callers should await loadModelRegistries() before using these functions for full data.
+  return { providerByModelId: new Map(), registryByModelId: new Map() }
 }
 
 export function getModelRegistryMetadata(modelId?: string): ProviderAwareModel | undefined {

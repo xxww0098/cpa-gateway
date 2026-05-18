@@ -5,7 +5,7 @@ import { Label } from '@/shared/components/ui/label'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { fetchMgmtApi } from '@/features/admin-proxy/api'
-import { fetchApi } from '@/shared/api/client'
+import { apiClient } from '@/shared/api/client'
 import { Input } from '@/shared/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select'
 import {
@@ -106,17 +106,17 @@ export default function AdminProxyConfigPage() {
     try {
       const globalConfig = await fetchMgmtApi('/config')
       
-      const debugData = await fetchMgmtApi('/debug')
-      setDebug(debugData.debug ?? debugData.value ?? false)
+      const debugData = (await fetchMgmtApi('/debug')) as Record<string, unknown>
+      setDebug(Boolean(debugData.debug ?? debugData.value ?? false))
 
-      const routingData = await fetchMgmtApi('/routing/strategy')
-      setRoutingStrategy(routingData.strategy ?? routingData['routing-strategy'] ?? routingData.routingStrategy ?? 'round-robin')
-      
-      const forcePrefixData = await fetchMgmtApi('/force-model-prefix')
-      setForceModelPrefix(forcePrefixData['force-model-prefix'] ?? forcePrefixData.forceModelPrefix ?? false)
-      
-      const sizeData = await fetchMgmtApi('/logs-max-total-size-mb')
-      setLogsMaxSize(sizeData['logs-max-total-size-mb'] ?? sizeData.logsMaxTotalSizeMb ?? 100)
+      const routingData = (await fetchMgmtApi('/routing/strategy')) as Record<string, unknown>
+      setRoutingStrategy(String(routingData.strategy ?? routingData['routing-strategy'] ?? routingData.routingStrategy ?? 'round-robin'))
+
+      const forcePrefixData = (await fetchMgmtApi('/force-model-prefix')) as Record<string, unknown>
+      setForceModelPrefix(Boolean(forcePrefixData['force-model-prefix'] ?? forcePrefixData.forceModelPrefix ?? false))
+
+      const sizeData = (await fetchMgmtApi('/logs-max-total-size-mb')) as Record<string, unknown>
+      setLogsMaxSize(Number(sizeData['logs-max-total-size-mb'] ?? sizeData.logsMaxTotalSizeMb ?? 100))
 
       const config = globalConfig as Record<string, unknown>
       const routing = (config.routing && typeof config.routing === 'object') ? config.routing as Record<string, unknown> : {}
@@ -171,10 +171,7 @@ export default function AdminProxyConfigPage() {
   const updateSDKExtraSetting = async (key: string, patchForm: SDKExtraConfigForm, updateStateFn: () => void) => {
     setTogglesLoading(prev => ({ ...prev, [key]: true }))
     try {
-      await fetchApi('/admin/sdk-config', {
-        method: 'PATCH',
-        body: JSON.stringify(buildSDKExtraConfigPatch(patchForm)),
-      })
+      await apiClient.patch('/admin/sdk-config', buildSDKExtraConfigPatch(patchForm))
       updateStateFn()
       toast.success('已自动保存')
     } catch (e: unknown) {

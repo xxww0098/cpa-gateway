@@ -187,3 +187,56 @@ func stringFromJSONBytes(data []byte, key string) string {
 	}
 	return stringFromMap(parsed, key)
 }
+
+// EnsureIncludeUsage ensures an OpenAI-compatible chat.completions payload
+// requests the terminal usage envelope on streaming responses. It is meant
+// to be invoked at the executor boundary when the caller has already decided
+// the outbound request is a streaming request.
+//
+// Behaviour (idempotent, additive):
+//
+//   - If payload is not valid JSON, return it unchanged. UsagePlugin's
+//     fallback path compensates when upstream usage cannot be observed, so
+//     silently falling through here keeps malformed-but-accepted payloads
+//     working end-to-end.
+//   - If the JSON body does not set `stream` to literal true, return it
+//     unchanged. Non-streaming requests always carry a top-level `usage`
+//     envelope in their response, so no hint is necessary.
+//   - Otherwise, set `stream_options.include_usage = true` while preserving
+//     every other key already present under `stream_options` (e.g.
+//     `include_input_tokens`).
+//
+// A second invocation on the same bytes is a no-op (idempotent).
+//
+// Defense in depth: even when the caller guarantees `opts.Stream == true`,
+// this helper still verifies the JSON body carries `stream: true` before
+// mutating. That way we never force `include_usage` onto a non-streaming
+// payload whose caller set the outbound Stream flag by mistake.
+func EnsureIncludeUsage(payload []byte) []byte {
+	if len(payload) == 0 {
+		return payload
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil || body == nil {
+		return payload
+	}
+	streamRaw, ok := body["stream"]
+	if !ok {
+		return payload
+	}
+	streamBool, ok := streamRaw.(bool)
+	if !ok || !streamBool {
+		return payload
+	}
+	opts, _ := body["stream_options"].(map[string]any)
+	if opts == nil {
+		opts = map[string]any{}
+	}
+	opts["include_usage"] = true
+	body["stream_options"] = opts
+	out, err := json.Marshal(body)
+	if err != nil {
+		return payload
+	}
+	return out
+}

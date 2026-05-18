@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	sdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/redis/go-redis/v9"
 	"github.com/xxww0098/cpa-gateway/config"
@@ -27,9 +28,29 @@ type PanelRouter struct {
 	Config      *config.Config
 	APIKeyCache *infra.APIKeyCache
 
+	// PriceCache is the in-memory ModelPrice cache shared with *pricing.Calculator.
+	// Populated by main.go after cache construction; nil-safe so callers (e.g. admin
+	// price upsert handlers) must check before invoking Invalidate. The constructor
+	// deliberately does not take this field to avoid changing NewPanelRouter's
+	// signature; tests that do not exercise pricing-cache invalidation leave it nil.
+	PriceCache *pricing.ModelPriceCache
+
+	// UserStatusCache memoizes the `users.status` column so that Panel JWT
+	// user-status rechecks (api/middleware.go, api/handler_admin.go) do not hit
+	// the DB on every request. Populated by main.go after construction with the
+	// same instance shared by sdk.AccessProvider.UserStatusCache so invalidation
+	// on one side is observed by the other; nil-safe so tests that do not
+	// exercise status-recheck paths can leave it unset and fall through to the
+	// DB (see sdk.AccessProvider.userIsActive for the same pattern).
+	UserStatusCache *infra.UserStatusCache
+
 	// SDK integration surface (populated by main.go; may be nil during tests).
 	AuthManager *cliproxyauth.Manager
 	AuthStore   cliproxyauth.Store
+
+	// OAuthTokenRequester delegates Antigravity/Kimi OAuth to the embedded SDK
+	// management handlers (device-flow + localhost callback). Nil in unit tests.
+	OAuthTokenRequester sdkapi.ManagementTokenRequester
 
 	// startedAt is captured once for metrics output.
 	startedAt time.Time
@@ -55,7 +76,6 @@ func NewPanelRouter(
 		startedAt: time.Now(),
 		metrics:   newMetricsStore(),
 	}
-	pr.APIKeyCache = infra.NewAPIKeyCache()
 	return pr
 }
 
@@ -66,7 +86,8 @@ func (pr *PanelRouter) RegisterPanelRoutes(r gin.IRouter) {
 	healthHandler := func(c *gin.Context) {
 		Success(c, gin.H{"status": "ok"})
 	}
-	r.GET("/healthz", healthHandler)
+	// /healthz is already registered by the SDK's internal server; only
+	// register /api/health to avoid a duplicate-route panic.
 	r.GET("/api/health", healthHandler)
 	r.GET("/metrics", pr.MetricsHandler)
 

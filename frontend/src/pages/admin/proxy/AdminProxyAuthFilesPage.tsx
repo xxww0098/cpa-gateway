@@ -1,19 +1,34 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { fetchMgmtApi, fetchMgmtApiFormData } from '@/features/admin-proxy/api'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import { buildAuthFilesFormData } from '@/features/admin-proxy/authFileImportUtils'
 import { getBatchStatusTargets, providerBadgeColor } from '@/features/admin-proxy/authFileViewUtils'
 import { fetchQuotaForFile, type QuotaResult } from '@/features/usage/quota'
 import { modelsApi } from '@/features/pricing/model_prices'
 import { toast } from 'sonner'
 import { ShieldCheck, ShieldX, ShieldAlert } from 'lucide-react'
-import type { AuthFileItem, SmartView } from '@/features/admin-proxy/types'
+import type { AuthFileEditFields, AuthFileItem, SmartView } from '@/features/admin-proxy/types'
 import { AuthFileToolbar } from '@/features/admin-proxy/components/AuthFileToolbar'
 import { AuthFileTable } from '@/features/admin-proxy/components/AuthFileTable'
 import { AuthFileUploadDialog } from '@/features/admin-proxy/components/AuthFileUploadDialog'
 import { AuthFileDeleteDialog } from '@/features/admin-proxy/components/AuthFileDeleteDialog'
 import { AuthFileBatchDeleteDialog } from '@/features/admin-proxy/components/AuthFileBatchDeleteDialog'
 import { AuthFileDetailDialog } from '@/features/admin-proxy/components/AuthFileDetailDialog'
+import { AuthFileEditDialog } from '@/features/admin-proxy/components/AuthFileEditDialog'
+import {
+  useAuthFiles,
+  useToggleAuthFile,
+  useDeleteAuthFile,
+  useUploadAuthFile,
+  useUpdateAuthFile,
+  useDownloadAuthFile,
+  useExportAuthFiles,
+  useBatchToggleAuthFiles,
+  useBatchDeleteAuthFiles,
+} from '@/features/admin-proxy/hooks'
 import type { SDKModelDefinition } from '@/features/pricing/model_prices'
+
+function authFileTarget(file: AuthFileItem): string {
+  return file.id || file.auth_id || file.name
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -62,8 +77,17 @@ function stateInfo(f: AuthFileItem) {
 // ── Page Component ──────────────────────────────────────────────────────────
 
 export default function AdminProxyAuthFilesPage() {
-  const [authFiles, setAuthFiles] = useState<AuthFileItem[]>([])
-  const [loading, setLoading] = useState(true)
+  // ── Data fetching via hooks ──
+  const { data: authFiles = [], isLoading: loading, refetch } = useAuthFiles()
+  const toggleMutation = useToggleAuthFile()
+  const deleteMutation = useDeleteAuthFile()
+  const uploadMutation = useUploadAuthFile()
+  const updateMutation = useUpdateAuthFile()
+  const downloadMutation = useDownloadAuthFile()
+  const exportMutation = useExportAuthFiles()
+  const batchToggleMutation = useBatchToggleAuthFiles()
+  const batchDeleteMutation = useBatchDeleteAuthFiles()
+
   const [refreshing, setRefreshing] = useState(false)
 
   // Filters
@@ -75,22 +99,25 @@ export default function AdminProxyAuthFilesPage() {
   const [showUpload, setShowUpload] = useState(false)
   const [uploadText, setUploadText] = useState('')
   const [uploadPickedFiles, setUploadPickedFiles] = useState<File[]>([])
-  const [uploading, setUploading] = useState(false)
 
   // Delete dialog
   const [showDelete, setShowDelete] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AuthFileItem | null>(null)
-  const [deleting, setDeleting] = useState(false)
 
   // Detail dialog
   const [showDetail, setShowDetail] = useState(false)
   const [detailItem, setDetailItem] = useState<AuthFileItem | null>(null)
 
+  // Edit dialog
+  const [showEdit, setShowEdit] = useState(false)
+  const [editTarget, setEditTarget] = useState<AuthFileItem | null>(null)
+
+  // Per-row download loading state
+  const [downloadLoading, setDownloadLoading] = useState<Record<string, boolean>>({})
+
   // Selection
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set())
   const [showBatchDelete, setShowBatchDelete] = useState(false)
-  const [batchDeleting, setBatchDeleting] = useState(false)
-  const [batchStatusLoading, setBatchStatusLoading] = useState(false)
 
   // Quota
   const quotaCache = useRef<Record<string, { result: QuotaResult; ts: number }>>({})
@@ -100,31 +127,6 @@ export default function AdminProxyAuthFilesPage() {
   // Registered models
   const [authModels, setAuthModels] = useState<Record<string, SDKModelDefinition[]>>({})
   const [authModelsLoading, setAuthModelsLoading] = useState<Record<string, boolean>>({})
-
-  // ── Fetch ──
-  const fetchAll = useCallback(async (silent = false, notify = false) => {
-    if (!silent) setLoading(true)
-    else setRefreshing(true)
-    try {
-      const res = await fetchMgmtApi('/auth-files')
-      const parsed = res?.files || res?.['auth-files'] || res?.authFiles || []
-      setAuthFiles(Array.isArray(parsed) ? parsed : [])
-      if (notify) toast.success('已同步 SDK 凭证列表')
-    } catch (e: unknown) {
-      if (!silent || notify) {
-        const prefix = notify ? '刷新列表失败' : '读取失败'
-        toast.error(`${prefix}: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    const timer = globalThis.setTimeout(() => { void fetchAll() }, 0)
-    return () => globalThis.clearTimeout(timer)
-  }, [fetchAll])
 
   // ── Computed ──
   const providers = useMemo(() => {
@@ -189,149 +191,136 @@ export default function AdminProxyAuthFilesPage() {
     })
   }
 
-  const handleToggle = async (file: AuthFileItem) => {
-    const nextDisabled = !file.disabled
-    try {
-      await fetchMgmtApi('/auth-files/status', {
-        method: 'PATCH',
-        body: JSON.stringify({ name: file.name, disabled: nextDisabled }),
-      })
-      toast.success(nextDisabled ? '已暂停调度' : '已恢复调度')
-      void fetchAll(true)
-    } catch (e: unknown) {
-      toast.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`)
-    }
+  const handleToggle = (file: AuthFileItem) => {
+    toggleMutation.mutate({ name: file.name, disabled: !file.disabled })
   }
 
-  const handleRefreshList = useCallback(() => {
-    void fetchAll(true, true)
-  }, [fetchAll])
+  const handleRefreshList = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await refetch()
+      toast.success('已同步 SDK 凭证列表')
+    } finally {
+      setRefreshing(false)
+    }
+  }, [refetch])
 
   const openDelete = (file: AuthFileItem) => {
     setDeleteTarget(file)
     setShowDelete(true)
   }
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteTarget) return
-    setDeleting(true)
-    try {
-      await fetchMgmtApi(`/auth-files?name=${encodeURIComponent(deleteTarget.name)}`, { method: 'DELETE' })
-      toast.success('凭证已删除')
-      setShowDelete(false)
-      setSelectedNames(prev => {
-        const next = new Set(prev)
-        next.delete(deleteTarget.name)
-        return next
-      })
-      void fetchAll(true)
-    } catch (e: unknown) {
-      toast.error(`删除失败: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setDeleting(false)
-    }
+    deleteMutation.mutate(deleteTarget.name, {
+      onSuccess: () => {
+        setShowDelete(false)
+        setSelectedNames(prev => {
+          const next = new Set(prev)
+          next.delete(deleteTarget.name)
+          return next
+        })
+      },
+    })
   }
 
-  const handleBatchStatus = async (disabled: boolean) => {
+  const handleBatchStatus = (disabled: boolean) => {
     const targets = disabled ? batchStatusTargets.pauseTargets : batchStatusTargets.resumeTargets
     if (targets.length === 0) return
-
-    setBatchStatusLoading(true)
-    let successCount = 0
-    let failCount = 0
-
-    try {
-      for (const file of targets) {
-        try {
-          await fetchMgmtApi('/auth-files/status', {
-            method: 'PATCH',
-            body: JSON.stringify({ name: file.name, disabled }),
-          })
-          successCount++
-        } catch (e) {
-          console.error(`Failed to update ${file.name}`, e)
-          failCount++
-        }
-      }
-
-      if (failCount === 0) {
-        toast.success(disabled ? `已暂停 ${successCount} 个凭证` : `已恢复 ${successCount} 个凭证`)
-      } else {
-        toast.warning(`${disabled ? '暂停' : '恢复'}完成: ${successCount} 成功, ${failCount} 失败`)
-      }
-      setSelectedNames(new Set())
-      await fetchAll(true)
-    } finally {
-      setBatchStatusLoading(false)
-    }
+    batchToggleMutation.mutate({ files: targets, disabled }, {
+      onSuccess: () => setSelectedNames(new Set()),
+    })
   }
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = () => {
     if (selectedNames.size === 0) return
-    setBatchDeleting(true)
-    let successCount = 0
-    let failCount = 0
-
-    try {
-      const names = Array.from(selectedNames)
-      for (const name of names) {
-        try {
-          await fetchMgmtApi(`/auth-files?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
-          successCount++
-        } catch (e) {
-          console.error(`Failed to delete ${name}`, e)
-          failCount++
-        }
-      }
-
-      if (failCount === 0) {
-        toast.success(`成功删除 ${successCount} 个凭证`)
-      } else {
-        toast.warning(`删除完成: ${successCount} 成功, ${failCount} 失败`)
-      }
-      setSelectedNames(new Set())
-      setShowBatchDelete(false)
-      void fetchAll(true)
-    } finally {
-      setBatchDeleting(false)
-    }
+    batchDeleteMutation.mutate(Array.from(selectedNames), {
+      onSuccess: () => {
+        setSelectedNames(new Set())
+        setShowBatchDelete(false)
+      },
+    })
   }
 
-  const handleUpload = async () => {
+  const openEdit = (file: AuthFileItem) => {
+    if (file.runtime_only === true) {
+      toast.error('运行时凭证由 config.yaml 注入，无法在此处编辑')
+      return
+    }
+    setEditTarget(file)
+    setShowEdit(true)
+  }
+
+  const handleEditSave = (fields: AuthFileEditFields) => {
+    if (!editTarget) return
+    const id = authFileTarget(editTarget)
+    if (!id) {
+      toast.error('凭证缺少 ID，无法保存')
+      return
+    }
+    updateMutation.mutate(
+      { id, fields: fields as Record<string, unknown> },
+      {
+        onSuccess: () => {
+          setShowEdit(false)
+          setEditTarget(null)
+        },
+      }
+    )
+  }
+
+  const handleDownload = (file: AuthFileItem) => {
+    const target = authFileTarget(file)
+    if (!target) {
+      toast.error('凭证缺少 ID，无法下载')
+      return
+    }
+    setDownloadLoading((prev) => ({ ...prev, [file.name]: true }))
+    downloadMutation.mutate(
+      { id: file.id, name: target },
+      {
+        onSettled: () => setDownloadLoading((prev) => ({ ...prev, [file.name]: false })),
+      }
+    )
+  }
+
+  const handleBatchExport = () => {
+    const ids = Array.from(selectedNames)
+      .map((name) => {
+        const file = authFiles.find((f) => f.name === name)
+        return file ? authFileTarget(file) : ''
+      })
+      .filter((id) => id !== '')
+    if (ids.length === 0) {
+      toast.error('请选择要导出的凭证')
+      return
+    }
+    exportMutation.mutate(ids)
+  }
+
+  const handleUpload = () => {
     const text = uploadText.trim()
     const hasFiles = uploadPickedFiles.length > 0
     if (!hasFiles && !text) {
       toast.error('请粘贴凭证内容或选择文件')
       return
     }
-    setUploading(true)
-    try {
-      if (hasFiles) {
-        const form = buildAuthFilesFormData(uploadPickedFiles)
-        const res = (await fetchMgmtApiFormData('/auth-files', form)) as Record<string, unknown> | string
-        if (res && typeof res === 'object' && res.status === 'partial' && Array.isArray(res.failed) && res.failed.length) {
-          const uploaded = typeof res.uploaded === 'number' ? res.uploaded : 0
-          toast.warning(`部分成功：已上传 ${uploaded} 个，${res.failed.length} 个失败`)
-        } else if (res && typeof res === 'object' && typeof res.uploaded === 'number' && res.uploaded > 1) {
-          toast.success(`凭证导入成功（${res.uploaded} 个文件）`)
-        } else {
-          toast.success('凭证导入成功')
-        }
-      } else {
-        const form = new FormData()
-        form.append('file', new File([text], 'pasted-import.json', { type: 'application/json' }))
-        await fetchMgmtApiFormData('/auth-files', form)
-        toast.success('凭证导入成功')
-      }
-      setShowUpload(false)
-      setUploadText('')
-      setUploadPickedFiles([])
-      void fetchAll(true)
-    } catch (e: unknown) {
-      toast.error(`导入失败: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setUploading(false)
+
+    let formData: FormData
+    if (hasFiles) {
+      formData = buildAuthFilesFormData(uploadPickedFiles)
+    } else {
+      formData = new FormData()
+      formData.append('file', new File([text], 'pasted-import.json', { type: 'application/json' }))
     }
+
+    uploadMutation.mutate(formData, {
+      onSuccess: () => {
+        setShowUpload(false)
+        setUploadText('')
+        setUploadPickedFiles([])
+      },
+    })
   }
 
   // ── Quota & Models ──
@@ -395,10 +384,12 @@ export default function AdminProxyAuthFilesPage() {
         selectedCount={selectedNames.size}
         selectedPausableCount={batchStatusTargets.pauseTargets.length}
         selectedResumableCount={batchStatusTargets.resumeTargets.length}
-        batchStatusLoading={batchStatusLoading}
-        onBatchPause={() => { void handleBatchStatus(true) }}
-        onBatchResume={() => { void handleBatchStatus(false) }}
+        batchStatusLoading={batchToggleMutation.isPending}
+        exportLoading={exportMutation.isPending}
+        onBatchPause={() => { handleBatchStatus(true) }}
+        onBatchResume={() => { handleBatchStatus(false) }}
         onBatchDelete={() => setShowBatchDelete(true)}
+        onBatchExport={handleBatchExport}
         onRefresh={handleRefreshList}
         refreshing={refreshing}
         onUpload={() => {
@@ -420,8 +411,11 @@ export default function AdminProxyAuthFilesPage() {
         onToggle={handleToggle}
         onDelete={openDelete}
         onDetail={openDetail}
+        onEdit={openEdit}
+        onDownload={handleDownload}
         onLoadQuota={loadQuota}
         quotaLoading={quotaLoading}
+        downloadLoading={downloadLoading}
         providerBadgeColor={providerBadgeColor}
         fmtRelative={fmtRelative}
         stateInfo={stateInfo}
@@ -438,7 +432,7 @@ export default function AdminProxyAuthFilesPage() {
           }
         }}
         onUpload={handleUpload}
-        uploading={uploading}
+        uploading={uploadMutation.isPending}
         value={uploadText}
         onValueChange={setUploadText}
         pickedFiles={uploadPickedFiles}
@@ -449,7 +443,7 @@ export default function AdminProxyAuthFilesPage() {
         open={showBatchDelete}
         onOpenChange={setShowBatchDelete}
         onConfirm={handleBatchDelete}
-        deleting={batchDeleting}
+        deleting={batchDeleteMutation.isPending}
         count={selectedNames.size}
       />
 
@@ -457,8 +451,19 @@ export default function AdminProxyAuthFilesPage() {
         open={showDelete}
         onOpenChange={setShowDelete}
         onConfirm={handleDelete}
-        deleting={deleting}
+        deleting={deleteMutation.isPending}
         item={deleteTarget}
+      />
+
+      <AuthFileEditDialog
+        open={showEdit}
+        onOpenChange={(open) => {
+          setShowEdit(open)
+          if (!open) setEditTarget(null)
+        }}
+        item={editTarget}
+        saving={updateMutation.isPending}
+        onSave={handleEditSave}
       />
 
       <AuthFileDetailDialog

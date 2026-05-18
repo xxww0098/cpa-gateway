@@ -21,6 +21,14 @@ type SettleCtx struct {
 	// UserID is the authenticated tenant user.
 	UserID uint
 
+	// ApiKeyID is the ID of the API key used to authenticate this request.
+	// Zero when the request is authenticated via JWT without an API key.
+	ApiKeyID uint
+
+	// GroupID is the group the authenticated API key belongs to.
+	// Nil when the request has no associated group (e.g. JWT-only auth).
+	GroupID *uint
+
 	// RateMult is the group-configured rate multiplier (defaults to 1.0).
 	RateMult float64
 
@@ -36,6 +44,15 @@ type SettleCtx struct {
 	// any other streaming transport. It is consumed by the pricing
 	// Calculator to bias the Hold estimate upward.
 	Stream bool
+
+	// IPAddress is the client IP address extracted from the request context,
+	// recorded in UsageLog for abuse investigation.
+	IPAddress string
+
+	// IdempotencyKey is the deduplication identifier from the client request
+	// header (Idempotency-Key or X-Idempotency-Key), used to prevent
+	// duplicate billing for retried requests.
+	IdempotencyKey string
 }
 
 // settleCtxKey is an unexported context key type to prevent collisions

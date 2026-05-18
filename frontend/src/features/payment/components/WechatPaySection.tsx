@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { QRCodeSVG } from "qrcode.react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card"
 import { Button } from "@/shared/components/ui/button"
 import { Input } from "@/shared/components/ui/input"
 import { toast } from "sonner"
 import { MessageSquare, Loader2, CheckCircle2, XCircle, RefreshCw } from "lucide-react"
-import { createWechatOrder, getWechatOrderStatus, type WechatCreateResponse } from "@/features/payment/wechat_pay"
+import { useCreateWechatOrder, useWechatOrderStatus } from "@/features/payment/hooks"
+import type { WechatCreateResponse } from "@/features/payment/types"
 
 interface WechatPaySectionProps {
   onSuccess?: () => void
@@ -13,79 +14,46 @@ interface WechatPaySectionProps {
 
 export default function WechatPaySection({ onSuccess }: WechatPaySectionProps) {
   const [amount, setAmount] = useState("")
-  const [loading, setLoading] = useState(false)
   const [order, setOrder] = useState<WechatCreateResponse | null>(null)
-  const [status, setStatus] = useState<"pending" | "paid" | "failed" | null>(null)
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [polling, setPolling] = useState(false)
 
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current)
-      pollTimerRef.current = null
-    }
-  }, [])
+  const createOrder = useCreateWechatOrder()
 
-  const startPolling = useCallback(
-    (orderId: string) => {
-      stopPolling()
-      setStatus("pending")
+  const statusQuery = useWechatOrderStatus(order?.order_id ?? null, polling)
+  const status = statusQuery.data?.status ?? null
 
-      const check = async () => {
-        try {
-          const res = await getWechatOrderStatus(orderId)
-          setStatus(res.status)
-
-          if (res.status === "paid") {
-            stopPolling()
-            toast.success(`微信支付成功！已充值 $${res.amount.toFixed(2)}`)
-            onSuccess?.()
-          } else if (res.status === "failed") {
-            stopPolling()
-            toast.error("支付失败，请重试")
-          }
-        } catch (err: unknown) {
-          // Keep polling on network errors; don't show toast every time
-          console.error("Poll status error:", err)
-        }
-      }
-
-      check()
-      pollTimerRef.current = setInterval(check, 3000)
-    },
-    [stopPolling, onSuccess]
-  )
-
+  // Handle status transitions
   useEffect(() => {
-    return () => {
-      stopPolling()
+    if (status === "paid") {
+      setPolling(false)
+      toast.success(`微信支付成功！已充值 $${statusQuery.data!.amount.toFixed(2)}`)
+      onSuccess?.()
+    } else if (status === "failed") {
+      setPolling(false)
+      toast.error("支付失败，请重试")
     }
-  }, [stopPolling])
+  }, [status, statusQuery.data, onSuccess])
 
-  const handleCreateOrder = async () => {
+  const handleCreateOrder = useCallback(async () => {
     const val = parseFloat(amount)
     if (!val || val <= 0 || isNaN(val)) {
       toast.error("请输入有效的充值金额")
       return
     }
 
-    setLoading(true)
-    try {
-      const res = await createWechatOrder(val)
-      setOrder(res)
-      startPolling(res.order_id)
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "创建订单失败")
-    } finally {
-      setLoading(false)
-    }
-  }
+    createOrder.mutate(val, {
+      onSuccess: (res) => {
+        setOrder(res)
+        setPolling(true)
+      },
+    })
+  }, [amount, createOrder])
 
-  const handleReset = () => {
-    stopPolling()
+  const handleReset = useCallback(() => {
+    setPolling(false)
     setOrder(null)
-    setStatus(null)
     setAmount("")
-  }
+  }, [])
 
   return (
     <Card className="shadow-sm border-border">
@@ -115,14 +83,14 @@ export default function WechatPaySection({ onSuccess }: WechatPaySectionProps) {
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   className="flex-1"
-                  disabled={loading}
+                  disabled={createOrder.isPending}
                 />
                 <Button
                   onClick={handleCreateOrder}
-                  disabled={loading || !amount}
+                  disabled={createOrder.isPending || !amount}
                   className="shrink-0"
                 >
-                  {loading ? (
+                  {createOrder.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     "生成二维码"
@@ -138,7 +106,7 @@ export default function WechatPaySection({ onSuccess }: WechatPaySectionProps) {
                   variant="outline"
                   size="sm"
                   onClick={() => setAmount(String(preset))}
-                  disabled={loading}
+                  disabled={createOrder.isPending}
                   className="flex-1"
                 >
                   ${preset}
@@ -181,7 +149,7 @@ export default function WechatPaySection({ onSuccess }: WechatPaySectionProps) {
                     value={order.code_url}
                     size={200}
                     level="M"
-                    includeMargin={false}
+                    marginSize={0}
                   />
                 </div>
                 <div className="text-center space-y-1">

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiCallRequest, ApiCallResult } from '@/shared/api/request'
+import type { ApiCallRequest, ApiCallResult } from '@/features/admin-proxy/api'
 import {
   buildAmpcodeControlPlaneEndpoints,
   normalizeAmpcodeGatewayBase,

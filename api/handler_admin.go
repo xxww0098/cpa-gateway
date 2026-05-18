@@ -1,11 +1,15 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xxww0098/cpa-gateway/model"
+	"gorm.io/gorm"
 )
 
 func (pr *PanelRouter) RegisterAdminRoutes(rg *gin.RouterGroup) {
@@ -133,15 +137,49 @@ func (pr *PanelRouter) requireAdmin(c *gin.Context) bool {
 	if !ok {
 		return false
 	}
-	if pr.isAdminEmail(bc.Email) {
-		return true
-	}
 
-	var user model.User
-	if err := pr.DB.WithContext(c.Request.Context()).First(&user, bc.UserID).Error; err == nil && pr.isAdminEmail(user.Email) {
+	isAdmin, err := pr.userHasAdminRole(c.Request.Context(), bc.UserID)
+	if err != nil {
+		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to verify admin permission")
+		return false
+	}
+	if isAdmin {
 		return true
 	}
 
 	Error(c, http.StatusForbidden, apiErrorUnauthorized, "admin permission required")
 	return false
+}
+
+// isAdminCaller is a non-writing admin probe: it returns true if the caller's
+// users row has Role=admin and Status=active. Unlike requireAdmin it never
+// writes an error response — handlers that want to branch their output shape
+// (e.g. AvailableGroupsHandler returning the full vs. entitlement-filtered group
+// list per Requirement 3.3) use this to discover the caller role without
+// terminating the request. Any DB failure is treated as "not admin" because
+// this is only a filter predicate.
+func (pr *PanelRouter) isAdminCaller(c *gin.Context, bc *BillingCtx) bool {
+	if pr == nil || bc == nil {
+		return false
+	}
+	isAdmin, err := pr.userHasAdminRole(c.Request.Context(), bc.UserID)
+	return err == nil && isAdmin
+}
+
+func (pr *PanelRouter) userHasAdminRole(ctx context.Context, userID uint) (bool, error) {
+	if pr == nil || pr.DB == nil || userID == 0 {
+		return false, nil
+	}
+
+	var user model.User
+	err := pr.DB.WithContext(ctx).
+		Select("role", "status").
+		First(&user, userID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return user.Status == userStatusActive && strings.EqualFold(strings.TrimSpace(user.Role), "admin"), nil
 }

@@ -1,38 +1,32 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { fetchApi } from '@/shared/api/client'
+import { useRegister } from '@/features/auth/hooks'
+import { errorMessage } from '@/shared/api/errors'
 import { Mail, Lock, ArrowRight, Loader2, AlertCircle, Key, Eye, EyeOff } from 'lucide-react'
-import { toast } from 'sonner'
 
 export default function Register() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [inviteCode, setInviteCode] = useState('')
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
+  const registerMutation = useRegister()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
     setError('')
-    try {
-      const res = await fetchApi('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({ email, password, invite_code: inviteCode })
-      })
-      if (res.code === 0) {
-        toast.success("注册成功，请登录")
-        navigate('/login')
-      } else {
-        setError(res.message || '注册失败')
+    registerMutation.mutate(
+      { email, password, invite_code: inviteCode || undefined },
+      {
+        onSuccess: () => {
+          navigate('/login')
+        },
+        onError: (err) => {
+          setError(errorMessage(err, '注册失败'))
+        },
       }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '请求异常')
-    } finally {
-      setLoading(false)
-    }
+    )
   }
 
   return (
@@ -110,10 +104,10 @@ export default function Register() {
 
         <button 
           type="submit" 
-          disabled={loading || !email || !password}
+          disabled={registerMutation.isPending || !email || !password}
           className="btn btn-primary w-full mt-2"
         >
-          {loading ? (
+          {registerMutation.isPending ? (
             <><Loader2 className="w-5 h-5 animate-spin mr-2" /> 提交中...</>
           ) : (
             <>立即注册 <ArrowRight className="w-4 h-4 ml-1" /></>

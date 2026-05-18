@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react"
 import { useParams, useNavigate, useSearchParams } from "react-router-dom"
-import { fetchApi } from "@/shared/api/client"
+import { useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/shared/api/query-keys"
 import { toast } from "sonner"
 import { Button } from "@/shared/components/ui/button"
 import { Textarea } from "@/shared/components/ui/textarea"
@@ -17,40 +18,13 @@ import {
 } from "lucide-react"
 import { TicketImageUploadButton } from "@/features/tickets/TicketImageUploadButton"
 import { TicketRichContent } from "@/features/tickets/TicketRichContent"
-
-interface TicketItem {
-  id: number
-  title: string
-  category: string
-  status: string
-  priority: string
-  assigned_to?: number | null
-  created_at: string
-  updated_at: string
-}
-
-interface TicketReply {
-  id: number
-  user_id: number
-  content: string
-  is_staff: boolean
-  created_at: string
-}
-
-interface TicketDetail {
-  id: number
-  title: string
-  category: string
-  status: string
-  priority: string
-  user_id: number
-  user_email?: string
-  assigned_to?: number | null
-  created_at: string
-  updated_at: string
-  closed_at?: string | null
-  replies: TicketReply[]
-}
+import {
+  useTickets,
+  useTicketDetail,
+  useCreateTicket,
+  useReplyTicket,
+} from "@/features/tickets/hooks"
+import type { TicketItem } from "@/features/tickets/types"
 
 const STATUS_LABEL: Record<string, string> = {
   open: "待处理",
@@ -102,7 +76,7 @@ type UserComposePaneProps = {
 
 const UserComposePane = memo(function UserComposePane({ onCreated }: UserComposePaneProps) {
   const [text, setText] = useState("")
-  const [sending, setSending] = useState(false)
+  const createTicketMutation = useCreateTicket()
 
   const submit = async () => {
     const content = text.trim()
@@ -110,26 +84,21 @@ const UserComposePane = memo(function UserComposePane({ onCreated }: UserCompose
       toast.error("请先输入要说明的内容")
       return
     }
-    setSending(true)
     try {
-      const res = await fetchApi("/user/tickets", {
-        method: "POST",
-        body: JSON.stringify({
-          title: deriveTicketTitle(content),
-          category: "other",
-          priority: "medium",
-          content,
-        }),
+      const res = await createTicketMutation.mutateAsync({
+        title: deriveTicketTitle(content),
+        category: "other",
+        priority: "medium",
+        content,
       })
-      toast.success("工单已创建")
       setText("")
-      onCreated(res.data.id)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "创建失败")
-    } finally {
-      setSending(false)
+      onCreated((res as { id: number }).id)
+    } catch {
+      // error handled by hook's onError
     }
   }
+
+  const sending = createTicketMutation.isPending
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white dark:bg-dark-900">
@@ -185,41 +154,12 @@ const UserTicketChatPane = memo(function UserTicketChatPane({
   onTicketUpdated,
   onNewConversation,
 }: UserTicketChatPaneProps) {
-  const [ticket, setTicket] = useState<TicketDetail | null>(null)
-  const [loading, setLoading] = useState(false)
   const [replyContent, setReplyContent] = useState("")
-  const [sending, setSending] = useState(false)
   const [closing, setClosing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const loadTicket = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!ticketId) return
-      const silent = opts?.silent ?? false
-      if (!silent) setLoading(true)
-      try {
-        const res = await fetchApi(`/user/tickets/${ticketId}`)
-        if (res?.data) {
-          setTicket(res.data)
-        } else {
-          setTicket(null)
-        }
-      } catch {
-        setTicket(null)
-      } finally {
-        if (!silent) setLoading(false)
-      }
-    },
-    [ticketId]
-  )
-
-  useEffect(() => {
-    if (!ticketId) {
-      setTicket(null)
-      return
-    }
-    void loadTicket({ silent: false })
-  }, [ticketId, loadTicket])
+  const { data: ticket, isLoading: loading, refetch } = useTicketDetail(ticketId)
+  const replyMutation = useReplyTicket()
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" })
@@ -229,42 +169,33 @@ const UserTicketChatPane = memo(function UserTicketChatPane({
     async (raw: string) => {
       const content = raw.trim()
       if (!ticketId || !content) return
-      setSending(true)
       try {
-        await fetchApi(`/user/tickets/${ticketId}/replies`, {
-          method: "POST",
-          body: JSON.stringify({ content }),
-        })
+        await replyMutation.mutateAsync({ ticketId, body: { content } })
         setReplyContent("")
-        toast.success("已发送")
-        await loadTicket({ silent: true })
+        await refetch()
         onTicketUpdated()
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "发送失败")
-      } finally {
-        setSending(false)
+      } catch {
+        // error handled by hook's onError
       }
     },
-    [ticketId, loadTicket, onTicketUpdated]
+    [ticketId, replyMutation, refetch, onTicketUpdated]
   )
 
   const handleClose = async () => {
     if (!ticketId) return
     setClosing(true)
     try {
-      await fetchApi(`/user/tickets/${ticketId}/replies`, {
-        method: "POST",
-        body: JSON.stringify({ content: "用户确认关闭工单" }),
-      })
-      toast.success("工单已关闭")
-      await loadTicket({ silent: true })
+      await replyMutation.mutateAsync({ ticketId, body: { content: "用户确认关闭工单" } })
+      await refetch()
       onTicketUpdated()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "关闭失败")
+    } catch {
+      // error handled by hook's onError
     } finally {
       setClosing(false)
     }
   }
+
+  const sending = replyMutation.isPending
 
   if (!ticketId) {
     return (
@@ -318,7 +249,7 @@ const UserTicketChatPane = memo(function UserTicketChatPane({
             </Button>
             <button
               type="button"
-              onClick={() => void loadTicket({ silent: true })}
+              onClick={() => void refetch()}
               className="text-xs text-gray-500 underline-offset-2 hover:underline dark:text-dark-400"
             >
               刷新
@@ -429,17 +360,16 @@ export default function TicketsPage() {
   const { id: routeTicketId } = useParams<{ id?: string }>()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-
-  const [tickets, setTickets] = useState<TicketItem[]>([])
-  const [listBusy, setListBusy] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
-  const [total, setTotal] = useState(0)
   const [filterStatus, setFilterStatus] = useState("")
-  const [listReady, setListReady] = useState(false)
-  const listSoftRef = useRef(false)
+  const qc = useQueryClient()
 
   const composeMode = searchParams.get("compose") === "1" && !routeTicketId
+
+  const { data, isLoading: listBusy, refetch: loadList } = useTickets(page, pageSize, filterStatus || undefined)
+  const tickets: TicketItem[] = data?.items || []
+  const total = data?.total || 0
 
   useEffect(() => {
     if (!routeTicketId) return
@@ -453,31 +383,6 @@ export default function TicketsPage() {
     if (searchParams.get("create") !== "1") return
     navigate({ pathname: "/tickets", search: "?compose=1" }, { replace: true })
   }, [searchParams, navigate])
-
-  const loadList = useCallback(async () => {
-    if (listSoftRef.current) setListBusy(true)
-    try {
-      const params = new URLSearchParams()
-      params.set("page", String(page))
-      params.set("page_size", String(pageSize))
-      if (filterStatus) params.set("status", filterStatus)
-      const res = await fetchApi(`/user/tickets?${params}`)
-      if (res?.data) {
-        setTickets(res.data.items || [])
-        setTotal(res.data.total || 0)
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "加载工单列表失败")
-    } finally {
-      setListBusy(false)
-      listSoftRef.current = true
-      setListReady(true)
-    }
-  }, [page, pageSize, filterStatus])
-
-  useEffect(() => {
-    void loadList()
-  }, [loadList])
 
   const handleFilter = useCallback((status: string) => {
     setFilterStatus(status)
@@ -494,9 +399,9 @@ export default function TicketsPage() {
   const onTicketCreated = useCallback(
     (id: number) => {
       navigate(`/tickets/${id}`, { replace: true })
-      void loadList()
+      qc.invalidateQueries({ queryKey: queryKeys.tickets.all() })
     },
-    [navigate, loadList]
+    [navigate, qc]
   )
 
   return (
@@ -537,7 +442,7 @@ export default function TicketsPage() {
           </div>
 
           <div className={`min-h-[160px] flex-1 overflow-y-auto ${listBusy && tickets.length > 0 ? "opacity-70" : ""}`}>
-            {!listReady && tickets.length === 0 ? (
+            {listBusy && tickets.length === 0 ? (
               <div className="px-3 py-8 text-center text-xs text-gray-400 dark:text-dark-500">加载中</div>
             ) : tickets.length === 0 ? (
               <div className="px-3 py-8 text-center text-xs text-gray-400 dark:text-dark-500">

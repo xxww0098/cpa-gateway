@@ -1,78 +1,126 @@
-import { useState, useCallback } from "react"
-import { errorMessage, fetchApi } from "@/shared/api/client"
+import { useState, useMemo, useCallback } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/shared/api/query-keys"
+import { errorMessage } from "@/shared/api/errors"
 import { toast } from "sonner"
-import type { Subscription, RefundRecord, PaymentOrder } from "./types"
+import type { PaymentOrder } from "./types"
+import { fetchUserSubscriptions, fetchRefundList, fetchPaymentOrders } from "./api"
+
+// ── useSubscriptionOrders ───────────────────────────────────────────────────
+
+export function useSubscriptionOrders() {
+  const subsQuery = useQuery({
+    queryKey: queryKeys.orders.subscriptions(),
+    queryFn: fetchUserSubscriptions,
+  })
+
+  const refundsQuery = useQuery({
+    queryKey: queryKeys.orders.refunds(),
+    queryFn: fetchRefundList,
+  })
+
+  const subs = subsQuery.data ?? []
+  const refunds = refundsQuery.data?.items ?? []
+  const loading = subsQuery.isLoading || refundsQuery.isLoading
+
+  const pendingRefundSubIds = useMemo(
+    () => new Set(refunds.filter((r) => r.status === 'pending').map((r) => r.subscription_id)),
+    [refunds]
+  )
+  const completedRefundSubIds = useMemo(
+    () => new Set(refunds.filter((r) => r.status === 'approved').map((r) => r.subscription_id)),
+    [refunds]
+  )
+  const refundedSubIds = useMemo(
+    () => new Set([...pendingRefundSubIds, ...completedRefundSubIds]),
+    [pendingRefundSubIds, completedRefundSubIds]
+  )
+
+  return {
+    subs,
+    refunds,
+    loading,
+    refundedSubIds,
+    pendingRefundSubIds,
+    completedRefundSubIds,
+    error: subsQuery.error || refundsQuery.error,
+  }
+}
+
+// ── usePaymentOrders (with pagination) ──────────────────────────────────────
+
+export function usePaymentOrders(page: number, pageSize: number, status?: string) {
+  const query = useQuery({
+    queryKey: queryKeys.orders.list({ page, pageSize, status }),
+    queryFn: () => fetchPaymentOrders({ page, pageSize, status }),
+  })
+
+  if (query.error) {
+    toast.error(errorMessage(query.error, '加载订单失败'))
+  }
+
+  return {
+    orders: query.data?.items ?? [],
+    total: query.data?.total ?? 0,
+    currentPage: query.data?.page ?? page,
+    loading: query.isLoading,
+    error: query.error,
+    refetch: query.refetch,
+  }
+}
+
+// ── useOrders (composite hook — maintains backward-compatible interface) ────
 
 export function useOrders() {
   const [activeTab, setActiveTab] = useState<'subscription' | 'payment'>('subscription')
-
-  const [subs, setSubs] = useState<Subscription[]>([])
-  const [refunds, setRefunds] = useState<RefundRecord[]>([])
-  const [subLoading, setSubLoading] = useState(true)
-
-  const [orders, setOrders] = useState<PaymentOrder[]>([])
-  const [orderLoading, setOrderLoading] = useState(true)
   const [orderPage, setOrderPage] = useState(1)
   const [orderPageSize] = useState(20)
-  const [orderTotal, setOrderTotal] = useState(0)
   const [orderFilterStatus, setOrderFilterStatus] = useState('')
   const [selectedOrder, setSelectedOrder] = useState<PaymentOrder | null>(null)
 
-  const loadSubscriptions = useCallback(async () => {
-    setSubLoading(true)
-    try {
-      const [subsRes, refundsRes] = await Promise.all([
-        fetchApi('/user/subscriptions'),
-        fetchApi('/refund/list').catch(() => ({ data: { items: [] } })),
-      ])
-      setSubs(subsRes?.data || [])
-      setRefunds(refundsRes?.data?.items || [])
-    } catch (err: unknown) {
-      toast.error(errorMessage(err, '加载失败'))
-    } finally {
-      setSubLoading(false)
-    }
-  }, [])
+  const qc = useQueryClient()
 
-  const loadPaymentOrders = useCallback(async (p = 1) => {
-    setOrderLoading(true)
-    try {
-      const params = new URLSearchParams()
-      params.set('page', String(p))
-      params.set('page_size', String(orderPageSize))
-      if (orderFilterStatus) params.set('status', orderFilterStatus)
-      const res = await fetchApi(`/user/orders?${params}`)
-      if (res?.data) {
-        setOrders(res.data.items || [])
-        setOrderTotal(res.data.total || 0)
-        setOrderPage(res.data.page || p)
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '加载订单失败')
-    } finally {
-      setOrderLoading(false)
-    }
-  }, [orderPageSize, orderFilterStatus])
+  // Subscription data
+  const {
+    subs,
+    loading: subLoading,
+    refundedSubIds,
+    pendingRefundSubIds,
+    completedRefundSubIds,
+  } = useSubscriptionOrders()
 
-  const handleOrderFilter = (status: string) => {
+  // Payment orders data (with pagination)
+  const ordersQuery = useQuery({
+    queryKey: queryKeys.orders.list({ page: orderPage, pageSize: orderPageSize, status: orderFilterStatus || undefined }),
+    queryFn: () => fetchPaymentOrders({ page: orderPage, pageSize: orderPageSize, status: orderFilterStatus || undefined }),
+  })
+
+  const orders = ordersQuery.data?.items ?? []
+  const orderTotal = ordersQuery.data?.total ?? 0
+  const orderLoading = ordersQuery.isLoading
+
+  const handleOrderFilter = useCallback((status: string) => {
     setOrderFilterStatus(status)
     setOrderPage(1)
-    setTimeout(() => loadPaymentOrders(1), 0)
-  }
+  }, [])
 
-  const pendingRefundSubIds = new Set(
-    refunds.filter((r) => r.status === 'pending').map((r) => r.subscription_id)
-  )
-  const completedRefundSubIds = new Set(
-    refunds.filter((r) => r.status === 'approved').map((r) => r.subscription_id)
-  )
-  const refundedSubIds = new Set([...pendingRefundSubIds, ...completedRefundSubIds])
+  const loadSubscriptions = useCallback(() => {
+    qc.invalidateQueries({ queryKey: queryKeys.orders.subscriptions() })
+    qc.invalidateQueries({ queryKey: queryKeys.orders.refunds() })
+  }, [qc])
+
+  const loadPaymentOrders = useCallback((_page?: number) => {
+    // When called with a page number, update the page state which triggers refetch
+    if (_page !== undefined) {
+      setOrderPage(_page)
+    }
+    qc.invalidateQueries({ queryKey: queryKeys.orders.all() })
+  }, [qc])
 
   return {
     activeTab,
     setActiveTab,
     subs,
-    refunds,
     subLoading,
     orders,
     orderLoading,

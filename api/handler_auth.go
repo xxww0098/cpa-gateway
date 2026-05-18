@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -58,26 +58,25 @@ func (pr *PanelRouter) RegisterHandler(c *gin.Context) {
 		return
 	}
 
-	role := "user"
-	if pr.isAdminEmail(email) {
-		role = "admin"
-	}
-	user := model.User{Email: email, PasswordHash: string(hash), Role: role, Status: userStatusActive}
+	user := model.User{Email: email, PasswordHash: string(hash), Role: "user", Status: userStatusActive}
 	if err := pr.createUserWithInitialCredit(c, &user); err != nil {
 		if isUniqueConstraintError(err) {
+			pr.recordOperation(c, nil, "auth.register", "user:"+email, http.StatusConflict, map[string]any{"reason": "duplicate"})
 			Error(c, http.StatusConflict, apiErrorConflict, "email already registered")
 			return
 		}
+		pr.recordOperation(c, nil, "auth.register", "user:"+email, http.StatusInternalServerError, map[string]any{"reason": "create_failed"})
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create user")
 		return
 	}
 
-	token, err := authutil.GenerateJWT(user.ID, user.Email, pr.Config.Auth.JWT.Secret)
+	token, err := authutil.GenerateJWT(user.ID, user.Email, pr.Config.Auth.JWT.Secret, pr.Config.Auth.JWT.ExpiryHours)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to generate token")
 		return
 	}
 
+	pr.recordOperation(c, &BillingCtx{UserID: user.ID, Email: user.Email}, "auth.register", "user:"+strconv.FormatUint(uint64(user.ID), 10), http.StatusOK, nil)
 	Success(c, gin.H{"token": token, "user": authUserFromModel(user)})
 }
 
@@ -102,6 +101,7 @@ func (pr *PanelRouter) LoginHandler(c *gin.Context) {
 	var user model.User
 	if err := pr.DB.WithContext(c.Request.Context()).Where("email = ? AND status = ?", email, userStatusActive).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			pr.recordOperation(c, nil, "auth.login", "user:"+email, http.StatusUnauthorized, map[string]any{"reason": "not_found"})
 			Error(c, http.StatusUnauthorized, apiErrorUnauthorized, "invalid email or password")
 			return
 		}
@@ -110,22 +110,18 @@ func (pr *PanelRouter) LoginHandler(c *gin.Context) {
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		pr.recordOperation(c, &BillingCtx{UserID: user.ID, Email: user.Email}, "auth.login", "user:"+strconv.FormatUint(uint64(user.ID), 10), http.StatusUnauthorized, map[string]any{"reason": "bad_password"})
 		Error(c, http.StatusUnauthorized, apiErrorUnauthorized, "invalid email or password")
 		return
 	}
 
-	// Auto-promote admin role based on admin_emails config if DB role is stale.
-	if pr.isAdminEmail(user.Email) && user.Role != "admin" {
-		pr.DB.WithContext(c.Request.Context()).Model(&user).Update("role", "admin")
-		user.Role = "admin"
-	}
-
-	token, err := authutil.GenerateJWT(user.ID, user.Email, pr.Config.Auth.JWT.Secret)
+	token, err := authutil.GenerateJWT(user.ID, user.Email, pr.Config.Auth.JWT.Secret, pr.Config.Auth.JWT.ExpiryHours)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to generate token")
 		return
 	}
 
+	pr.recordOperation(c, &BillingCtx{UserID: user.ID, Email: user.Email}, "auth.login", "user:"+strconv.FormatUint(uint64(user.ID), 10), http.StatusOK, map[string]any{"role": user.Role})
 	Success(c, gin.H{"token": token, "user": authUserFromModel(user)})
 }
 
@@ -174,26 +170,10 @@ func isUniqueConstraintError(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "UNIQUE constraint"))
 }
 
-// isAdminEmail reports whether the supplied email matches a configured admin
-// address (case-insensitive, trimmed). Returns false when no admin emails
-// are configured.
-func (pr *PanelRouter) isAdminEmail(email string) bool {
-	if pr == nil || pr.Config == nil {
-		return false
-	}
-	normalized := strings.ToLower(strings.TrimSpace(email))
-	if normalized == "" {
-		return false
-	}
-	return slices.ContainsFunc(pr.Config.Auth.AdminEmails, func(ae string) bool {
-		return strings.EqualFold(strings.TrimSpace(ae), normalized)
-	})
-}
-
 // StartCacheCleanup launches the in-memory API-key cache sweeper.
 func (pr *PanelRouter) StartCacheCleanup(ctx context.Context) {
 	if pr == nil || pr.APIKeyCache == nil {
 		return
 	}
-	pr.APIKeyCache.Start(ctx)
+	go pr.APIKeyCache.Start(ctx)
 }

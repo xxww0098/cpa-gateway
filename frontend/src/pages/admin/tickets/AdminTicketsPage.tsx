@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { fetchApi } from "@/shared/api/client"
+import { useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/shared/api/query-keys"
 import { DEFAULT_TICKET_QUICK_REPLIES } from "@/shared/constants/ticketQuickReplyDefaults"
-import { toast } from "sonner"
 import { Button } from "@/shared/components/ui/button"
 import { Textarea } from "@/shared/components/ui/textarea"
 import {
@@ -14,42 +14,15 @@ import {
 } from "@/shared/components/ui/select"
 import { ChevronLeft, ChevronRight, Send, Loader2, User, Shield } from "lucide-react"
 import { TicketRichContent } from "@/features/tickets/TicketRichContent"
-
-interface TicketItem {
-  id: number
-  title: string
-  category: string
-  status: string
-  priority: string
-  user_id?: number
-  user_email?: string
-  assigned_to?: number | null
-  created_at: string
-  updated_at: string
-}
-
-interface TicketReply {
-  id: number
-  user_id: number
-  content: string
-  is_staff: boolean
-  created_at: string
-}
-
-interface TicketDetail {
-  id: number
-  title: string
-  category: string
-  status: string
-  priority: string
-  user_id: number
-  user_email?: string
-  assigned_to?: number | null
-  created_at: string
-  updated_at: string
-  closed_at?: string | null
-  replies: TicketReply[]
-}
+import {
+  useAdminTickets,
+  useAdminTicketDetail,
+  useAdminReplyTicket,
+  useUpdateTicketStatus,
+  useAssignTicket,
+} from "@/features/tickets/hooks"
+import { fetchTicketQuickReplies } from "@/features/tickets/api"
+import type { TicketItem } from "@/features/tickets/types"
 
 const STATUS_LABEL: Record<string, string> = {
   open: "待处理",
@@ -116,21 +89,21 @@ type TicketChatPaneProps = {
 }
 
 const TicketChatPane = memo(function TicketChatPane({ ticketId, onTicketUpdated }: TicketChatPaneProps) {
-  const [ticket, setTicket] = useState<TicketDetail | null>(null)
-  const [loading, setLoading] = useState(false)
   const [replyContent, setReplyContent] = useState("")
-  const [sending, setSending] = useState(false)
-  const [updatingStatus, setUpdatingStatus] = useState(false)
-  const [assigning, setAssigning] = useState(false)
   const [quickReplies, setQuickReplies] = useState(() => [...DEFAULT_TICKET_QUICK_REPLIES])
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const { data: ticket, isLoading: loading, refetch } = useAdminTicketDetail(ticketId)
+  const replyMutation = useAdminReplyTicket()
+  const statusMutation = useUpdateTicketStatus()
+  const assignMutation = useAssignTicket()
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await fetchApi("/admin/ticket-quick-replies")
-        const list = res?.data?.items as { label: string; text: string }[] | undefined
+        const res = await fetchTicketQuickReplies()
+        const list = res?.items
         if (!cancelled && Array.isArray(list) && list.length > 0) {
           setQuickReplies(list.map((r) => ({ label: String(r.label ?? ""), text: String(r.text ?? "") })))
         }
@@ -143,35 +116,6 @@ const TicketChatPane = memo(function TicketChatPane({ ticketId, onTicketUpdated 
     }
   }, [])
 
-  const loadTicket = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!ticketId) return
-      const silent = opts?.silent ?? false
-      if (!silent) setLoading(true)
-      try {
-        const res = await fetchApi(`/admin/tickets/${ticketId}`)
-        if (res?.data) {
-          setTicket(res.data)
-        } else {
-          setTicket(null)
-        }
-      } catch {
-        setTicket(null)
-      } finally {
-        if (!silent) setLoading(false)
-      }
-    },
-    [ticketId]
-  )
-
-  useEffect(() => {
-    if (!ticketId) {
-      setTicket(null)
-      return
-    }
-    void loadTicket({ silent: false })
-  }, [ticketId, loadTicket])
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" })
   }, [ticket?.replies?.length, ticketId])
@@ -180,62 +124,45 @@ const TicketChatPane = memo(function TicketChatPane({ ticketId, onTicketUpdated 
     async (raw: string) => {
       const content = raw.trim()
       if (!ticketId || !content) return
-      setSending(true)
       try {
-        await fetchApi(`/admin/tickets/${ticketId}/replies`, {
-          method: "POST",
-          body: JSON.stringify({ content }),
-        })
+        await replyMutation.mutateAsync({ ticketId, body: { content } })
         setReplyContent("")
-        toast.success("回复成功")
-        await loadTicket({ silent: true })
+        await refetch()
         onTicketUpdated()
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "回复失败")
-      } finally {
-        setSending(false)
+      } catch {
+        // error handled by hook's onError
       }
     },
-    [ticketId, loadTicket, onTicketUpdated]
+    [ticketId, replyMutation, refetch, onTicketUpdated]
   )
 
   const handleReply = () => void submitReply(replyContent)
 
   const handleStatusChange = async (newStatus: string) => {
     if (!ticketId || newStatus === ticket?.status) return
-    setUpdatingStatus(true)
     try {
-      await fetchApi(`/admin/tickets/${ticketId}/status`, {
-        method: "PUT",
-        body: JSON.stringify({ status: newStatus }),
-      })
-      toast.success("状态已更新")
-      await loadTicket({ silent: true })
+      await statusMutation.mutateAsync({ ticketId, status: newStatus })
+      await refetch()
       onTicketUpdated()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "更新状态失败")
-    } finally {
-      setUpdatingStatus(false)
+    } catch {
+      // error handled by hook's onError
     }
   }
 
   const handleAssign = async (staffId: string) => {
     if (!ticketId) return
-    setAssigning(true)
     try {
-      await fetchApi(`/admin/tickets/${ticketId}/assign`, {
-        method: "PUT",
-        body: JSON.stringify({ staff_id: Number(staffId) }),
-      })
-      toast.success("工单已分配")
-      await loadTicket({ silent: true })
+      await assignMutation.mutateAsync({ ticketId, staffId: Number(staffId) })
+      await refetch()
       onTicketUpdated()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "分配失败")
-    } finally {
-      setAssigning(false)
+    } catch {
+      // error handled by hook's onError
     }
   }
+
+  const sending = replyMutation.isPending
+  const updatingStatus = statusMutation.isPending
+  const assigning = assignMutation.isPending
 
   if (!ticketId) {
     return (
@@ -277,7 +204,7 @@ const TicketChatPane = memo(function TicketChatPane({ ticketId, onTicketUpdated 
         <div className="mt-2 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => void loadTicket({ silent: true })}
+            onClick={() => void refetch()}
             className="text-xs text-gray-500 underline-offset-2 hover:underline dark:text-dark-400"
           >
             刷新对话
@@ -419,40 +346,14 @@ const TicketChatPane = memo(function TicketChatPane({ ticketId, onTicketUpdated 
 export default function AdminTickets() {
   const { id: routeTicketId } = useParams<{ id?: string }>()
   const navigate = useNavigate()
-  const [tickets, setTickets] = useState<TicketItem[]>([])
-  const [listBusy, setListBusy] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
-  const [total, setTotal] = useState(0)
   const [filterStatus, setFilterStatus] = useState("")
-  const [listReady, setListReady] = useState(false)
-  const listSoftRef = useRef(false)
+  const qc = useQueryClient()
 
-  const loadList = useCallback(async () => {
-    if (listSoftRef.current) setListBusy(true)
-    try {
-      const params = new URLSearchParams()
-      params.set("page", String(page))
-      params.set("page_size", String(pageSize))
-      if (filterStatus) params.set("status", filterStatus)
-
-      const listRes = await fetchApi(`/admin/tickets?${params}`)
-      if (listRes?.data) {
-        setTickets(listRes.data.items || [])
-        setTotal(listRes.data.total || 0)
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "加载工单列表失败")
-    } finally {
-      setListBusy(false)
-      listSoftRef.current = true
-      setListReady(true)
-    }
-  }, [page, pageSize, filterStatus])
-
-  useEffect(() => {
-    void loadList()
-  }, [loadList])
+  const { data, isLoading: listBusy, refetch: loadList } = useAdminTickets(page, pageSize, filterStatus || undefined)
+  const tickets: TicketItem[] = data?.items || []
+  const total = data?.total || 0
 
   const handleFilter = useCallback((status: string) => {
     setFilterStatus(status)
@@ -460,8 +361,8 @@ export default function AdminTickets() {
   }, [])
 
   const onTicketUpdated = useCallback(() => {
-    void loadList()
-  }, [loadList])
+    qc.invalidateQueries({ queryKey: queryKeys.tickets.all() })
+  }, [qc])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const selectedFromList = tickets.find((t) => String(t.id) === routeTicketId)
@@ -506,7 +407,7 @@ export default function AdminTickets() {
           <div
             className={`min-h-[160px] flex-1 overflow-y-auto ${listBusy && tickets.length > 0 ? "opacity-70" : ""}`}
           >
-            {!listReady && tickets.length === 0 ? (
+            {listBusy && tickets.length === 0 ? (
               <div className="px-3 py-8 text-center text-xs text-gray-400 dark:text-dark-500">加载中</div>
             ) : tickets.length === 0 ? (
               <div className="px-3 py-8 text-center text-xs text-gray-400 dark:text-dark-500">暂无工单</div>

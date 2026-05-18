@@ -1,10 +1,14 @@
 package api
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/xxww0098/cpa-gateway/ledger"
 	"github.com/xxww0098/cpa-gateway/model"
 	"gorm.io/gorm"
@@ -110,6 +114,39 @@ func (pr *PanelRouter) ListSubscriptionsHandler(c *gin.Context) {
 	Success(c, items)
 }
 
+// PurchaseSubscriptionHandler executes the debit -> create-subscription flow
+// atomically (Requirement 5). The sequence is:
+//
+//  1. Outstanding-debt preflight (Requirement 2.5): if the user has any
+//     unresolved shortfall in balance_logs, refuse with HTTP 402
+//     outstanding_debt before any write. This mirrors the HoldMiddleware
+//     preflight so a debtor cannot park their debt behind a subscription
+//     purchase.
+//  2. Load the requested subscription package.
+//  3. Generate a unique debit reference of the form
+//     "subscription_purchase:<package_id>:<nonce>" using uuid. The reference
+//     prefix (Requirement 5.3) lets operators pair the debit row with any
+//     later compensating credit by scanning Reference LIKE
+//     'subscription_purchase:<package_id>:%'.
+//  4. Debit the price from the user's balance. ErrInsufficientBalance
+//     surfaces as HTTP 400 with body {"error":"insufficient balance"} and
+//     guarantees no BalanceLog / Subscription row is written (Requirement
+//     5.5). Any other error is a 500.
+//  5. Create the Subscription row. If the insert fails, issue a
+//     compensating Credit with Reference
+//     "subscription_purchase:<package_id>:compensate:<debit_ref>"
+//     (Requirement 5.2, 5.3) so the user's balance is restored and
+//     operators can correlate the refund to the failed attempt. The
+//     compensation itself is best-effort: a compErr is logged at Error
+//     level (needs manual intervention) while the outer response still
+//     returns 500 to the caller.
+//  6. Success returns the existing payload.
+//
+// Log events emitted from this handler:
+//   - subscription_create_failed (Warn) — insert failure, includes ref.
+//   - subscription_compensation_failed (Error) — compensating credit also
+//     failed; operators must reconcile manually.
+//   - subscription_purchase_debt_block (Warn, via preflight) — user blocked.
 func (pr *PanelRouter) PurchaseSubscriptionHandler(c *gin.Context) {
 	bc, ok := pr.requireBillingCtx(c)
 	if !ok {
@@ -122,14 +159,39 @@ func (pr *PanelRouter) PurchaseSubscriptionHandler(c *gin.Context) {
 		return
 	}
 
-	var pkg model.SubscriptionPackage
-	if err := pr.DB.WithContext(c.Request.Context()).Where("group_id = ? AND enabled = ?", req.GroupID, true).First(&pkg).Error; err != nil {
-		Error(c, http.StatusNotFound, apiErrorNotFound, "subscription package not found")
+	if pr.Ledger == nil {
+		Error(c, http.StatusInternalServerError, apiErrorInternal, "ledger not initialized")
 		return
 	}
 
-	if pr.Ledger == nil {
-		Error(c, http.StatusInternalServerError, apiErrorInternal, "ledger not initialized")
+	ctx := c.Request.Context()
+
+	// (1) Outstanding-debt preflight. An error from the ledger is treated
+	// as "unknown" and fails closed: we refuse the purchase so a transient
+	// DB hiccup does not let a debtor charge through the block. The public
+	// body mirrors the HoldMiddleware preflight.
+	if outstanding, err := pr.Ledger.HasUnresolvedShortfall(ctx, bc.UserID); err != nil {
+		slog.Warn("subscription_purchase_shortfall_lookup_failed",
+			"event", "subscription_purchase_shortfall_lookup_failed",
+			"user_id", bc.UserID,
+			"err", err,
+		)
+		c.AbortWithStatusJSON(http.StatusPaymentRequired, gin.H{"error": "outstanding_debt"})
+		return
+	} else if outstanding {
+		slog.Warn("subscription_purchase_debt_block",
+			"event", "subscription_purchase_debt_block",
+			"user_id", bc.UserID,
+			"group_id", req.GroupID,
+		)
+		c.AbortWithStatusJSON(http.StatusPaymentRequired, gin.H{"error": "outstanding_debt"})
+		return
+	}
+
+	// (2) Load the package row that corresponds to the requested group.
+	var pkg model.SubscriptionPackage
+	if err := pr.DB.WithContext(ctx).Where("group_id = ? AND enabled = ?", req.GroupID, true).First(&pkg).Error; err != nil {
+		Error(c, http.StatusNotFound, apiErrorNotFound, "subscription package not found")
 		return
 	}
 
@@ -138,9 +200,19 @@ func (pr *PanelRouter) PurchaseSubscriptionHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid subscription package price")
 		return
 	}
-	if err := pr.Ledger.Debit(c.Request.Context(), bc.UserID, price, "subscription_purchase"); err != nil {
-		if err == ledger.ErrInsufficientBalance {
-			Error(c, http.StatusBadRequest, apiErrorBadRequest, "insufficient balance")
+
+	// (3) Build the debit reference. The package_id + nonce layout is the
+	// contract for pairing with the compensating credit on rollback; see
+	// design.md "BalanceLog.Reference prefix conventions".
+	ref := fmt.Sprintf("subscription_purchase:%d:%s", pkg.ID, uuid.NewString())
+
+	// (4) Debit the price. ErrInsufficientBalance is the only case where
+	// Debit returns without writing a BalanceLog row (see ledger.Debit's
+	// transaction body), so the "no subscription, no balance log" invariant
+	// in Requirement 5.5 holds simply by refusing here.
+	if err := pr.Ledger.Debit(ctx, bc.UserID, price, ref); err != nil {
+		if errors.Is(err, ledger.ErrInsufficientBalance) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "insufficient balance"})
 			return
 		}
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to purchase subscription")
@@ -176,12 +248,40 @@ func (pr *PanelRouter) PurchaseSubscriptionHandler(c *gin.Context) {
 		WeeklyLimitUSD:  pkg.WeeklyLimitUSD,
 		MonthlyLimitUSD: pkg.MonthlyLimitUSD,
 	}
-	if err := pr.DB.WithContext(c.Request.Context()).Create(&sub).Error; err != nil {
-		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to create subscription")
+	// (5) Create the Subscription row. On failure we immediately compensate
+	// the debit so the user's balance returns to its pre-request value; the
+	// refund reference embeds the original debit ref so operators can pair
+	// them deterministically.
+	if err := pr.DB.WithContext(ctx).Create(&sub).Error; err != nil {
+		compRef := fmt.Sprintf("subscription_purchase:%d:compensate:%s", pkg.ID, ref)
+		compErr := pr.Ledger.Credit(ctx, bc.UserID, price, compRef)
+
+		slog.Warn("subscription_create_failed",
+			"event", "subscription_create_failed",
+			"user_id", bc.UserID,
+			"package_id", pkg.ID,
+			"ref", ref,
+			"err", err,
+		)
+		if compErr != nil {
+			// The outer Debit row is still on the books and the user is
+			// charged; ops must issue a manual shortfall_resolve credit.
+			slog.Error("subscription_compensation_failed",
+				"event", "subscription_compensation_failed",
+				"user_id", bc.UserID,
+				"package_id", pkg.ID,
+				"ref", ref,
+				"compensate_ref", compRef,
+				"err", compErr,
+			)
+		}
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "subscription create failed"})
 		return
 	}
 
-	balance, err := pr.Ledger.GetBalance(c.Request.Context(), bc.UserID)
+	// (6) Success. Return the same payload the pre-hardening handler did so
+	// front-end contracts stay intact.
+	balance, err := pr.Ledger.GetBalance(ctx, bc.UserID)
 	if err != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to load balance")
 		return

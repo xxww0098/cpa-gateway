@@ -2,20 +2,20 @@ import { useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { toast } from 'sonner'
-import { depositUser } from '../api'
+import { useDepositUser } from '../hooks'
 import type { DepositPayload, UserItem } from '../types'
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   user: UserItem | null
-  onSuccess?: () => void
 }
 
-export function AdminUserDepositDialog({ open, onOpenChange, user, onSuccess }: Props) {
+export function AdminUserDepositDialog({ open, onOpenChange, user }: Props) {
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
-  const [depositing, setDepositing] = useState(false)
+
+  const deposit = useDepositUser()
 
   const preview = () => {
     const a = parseFloat(amount)
@@ -26,20 +26,13 @@ export function AdminUserDepositDialog({ open, onOpenChange, user, onSuccess }: 
     if (!user) return
     const a = parseFloat(amount)
     if (!Number.isFinite(a) || a <= 0) { toast.error('请输入正数金额'); return }
-    setDepositing(true)
-    try {
-      const payload: DepositPayload = { amount: a }
-      if (note.trim()) payload.note = note.trim()
-      await depositUser(user.id, payload)
-      toast.success('充值成功')
-      onOpenChange(false)
-      setAmount(''); setNote('')
-      onSuccess?.()
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : '充值失败')
-    } finally {
-      setDepositing(false)
-    }
+
+    const payload: DepositPayload = { amount: a }
+    if (note.trim()) payload.note = note.trim()
+
+    await deposit.mutateAsync({ id: user.id, payload })
+    onOpenChange(false)
+    setAmount(''); setNote('')
   }
 
   return (
@@ -83,8 +76,8 @@ export function AdminUserDepositDialog({ open, onOpenChange, user, onSuccess }: 
             <DialogPrimitive.Close asChild>
               <button className="btn btn-ghost px-4 text-sm">取消</button>
             </DialogPrimitive.Close>
-            <button className="btn btn-success px-5 text-sm" onClick={handleDeposit} disabled={depositing}>
-              {depositing ? '充值中...' : '确认充值'}
+            <button className="btn btn-success px-5 text-sm" onClick={handleDeposit} disabled={deposit.isPending}>
+              {deposit.isPending ? '充值中...' : '确认充值'}
             </button>
           </div>
           <DialogPrimitive.Close className="absolute right-4 top-4 rounded-md p-1 opacity-70 hover:opacity-100 transition-opacity">

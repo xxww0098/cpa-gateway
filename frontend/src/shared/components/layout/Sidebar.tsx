@@ -56,19 +56,19 @@ export function Sidebar() {
 
   const adminNavs: NavLinkItem[] = user?.role === 'admin'
     ? [
-        { label: '用户管理', path: '/users', icon: Users },
-        { label: '渠道管理', path: '/channels', icon: Network },
-        { label: '计费管理', path: '/billing', icon: CreditCard },
-        { label: '用量日志', path: '/usage-logs', icon: BarChart3 },
-        { label: '系统设置', path: '/settings', icon: Settings },
-        { label: '支付配置', path: '/payment-config', icon: Wallet },
-        { label: '订单管理', path: '/order-management', icon: ClipboardList },
-        { label: '退款管理', path: '/admin/refunds', icon: RotateCcw },
-        { label: '订阅管理', path: '/admin/subscriptions', icon: Crown },
-        { label: '工单管理', path: '/admin/tickets', icon: Ticket },
-        { label: '定价管理', path: '/admin/pricing', icon: Tag },
-        { label: '兑换码', path: '/admin/redeem-codes', icon: Gift },
-        { label: '审计日志', path: '/admin/audit-logs', icon: ShieldAlert },
+        { label: '用户', path: '/users', icon: Users, hint: '用户管理' },
+        { label: '渠道', path: '/channels', icon: Network, hint: '渠道管理' },
+        { label: '计费', path: '/billing', icon: CreditCard, hint: '计费管理' },
+        { label: '用量', path: '/usage-logs', icon: BarChart3, hint: '用量日志' },
+        { label: '设置', path: '/settings', icon: Settings, hint: '系统设置' },
+        { label: '支付', path: '/payment-config', icon: Wallet, hint: '支付配置' },
+        { label: '订单', path: '/order-management', icon: ClipboardList, hint: '订单管理' },
+        { label: '退款', path: '/admin/refunds', icon: RotateCcw, hint: '退款管理' },
+        { label: '订阅', path: '/admin/subscriptions', icon: Crown, hint: '订阅管理' },
+        { label: '工单', path: '/admin/tickets', icon: Ticket, hint: '工单管理' },
+        { label: '定价', path: '/admin/pricing', icon: Tag, hint: '定价管理' },
+        { label: '兑换', path: '/admin/redeem-codes', icon: Gift, hint: '兑换码' },
+        { label: '审计', path: '/admin/audit-logs', icon: ShieldAlert, hint: '审计日志' },
       ]
     : []
 
@@ -89,7 +89,7 @@ export function Sidebar() {
 
   const navRowClass = (active: boolean) =>
     cn(
-      'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 group',
+      'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium transition-all duration-200 group',
       active
         ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400'
         : 'text-gray-500 dark:text-dark-400 hover:bg-gray-50 dark:hover:bg-dark-800 hover:text-gray-900 dark:hover:text-white'
@@ -107,16 +107,16 @@ export function Sidebar() {
     <>
       <aside 
         className={`fixed inset-y-0 left-0 z-40 flex flex-col bg-white dark:bg-dark-900 border-r border-border transition-all duration-300 ${
-          sidebarCollapsed ? 'w-[72px]' : 'w-60'
+          sidebarCollapsed ? 'w-[72px]' : 'w-48'
         } ${!mobileOpen ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'}`}
       >
         {/* Brand Header */}
-        <div className="h-16 flex items-center px-4 border-b border-border flex-shrink-0 gap-3 max-w-full overflow-hidden">
+        <div className="h-16 flex items-center px-3 border-b border-border flex-shrink-0 gap-2.5 max-w-full overflow-hidden">
           <div className="flex w-9 h-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 text-white shadow-glow flex-shrink-0">
             <span className="font-bold text-lg">C</span>
           </div>
           {!sidebarCollapsed && (
-            <span className="text-lg font-bold text-gray-900 dark:text-white truncate">
+            <span className="text-base font-bold text-gray-900 dark:text-white truncate">
               CPA Gateway
             </span>
           )}
@@ -124,10 +124,10 @@ export function Sidebar() {
 
         {/* 导航与管理在同一滚动列内；分隔线仅作分组，不把侧栏切成上下两个独立区域 */}
         <nav className="flex flex-1 flex-col min-h-0 overflow-hidden">
-          <div className="flex-1 min-h-0 overflow-y-auto py-4 px-3 scrollbar-hide">
+          <div className="flex-1 min-h-0 overflow-y-auto py-3 px-2 scrollbar-hide">
             <div className="space-y-1">
               {!sidebarCollapsed && (
-                <div className="px-3 mb-3 text-[11px] font-semibold uppercase tracking-widest text-gray-400 dark:text-dark-400">
+                <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-widest text-gray-400 dark:text-dark-400">
                   导航
                 </div>
               )}
@@ -161,7 +161,7 @@ export function Sidebar() {
                 />
                 <div className="space-y-1">
                   {!sidebarCollapsed && (
-                    <div className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-widest text-gray-400 dark:text-dark-400">
+                    <div className="px-2 mb-2 text-[11px] font-semibold uppercase tracking-widest text-gray-400 dark:text-dark-400">
                       管理
                     </div>
                   )}
@@ -188,29 +188,29 @@ export function Sidebar() {
         </nav>
 
         {/* Footer actions */}
-        <div className="p-3 border-t border-border flex flex-col gap-0.5">
+        <div className="p-2 border-t border-border flex flex-col gap-0.5">
           <button
             onClick={toggleTheme}
             title={sidebarCollapsed ? (theme === 'dark' ? '亮色模式' : '暗色模式') : undefined}
-            className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-gray-500 dark:text-dark-400 hover:bg-gray-50 dark:hover:bg-dark-800 hover:text-gray-700 dark:hover:text-white transition-colors w-full"
+            className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium text-gray-500 dark:text-dark-400 hover:bg-gray-50 dark:hover:bg-dark-800 hover:text-gray-700 dark:hover:text-white transition-colors w-full"
           >
             {theme === 'dark' ? <Sun className="h-[18px] w-[18px] text-amber-500" /> : <Moon className="h-[18px] w-[18px]" />}
-            {!sidebarCollapsed && <span>{theme === 'dark' ? '亮色模式' : '暗色模式'}</span>}
+            {!sidebarCollapsed && <span>{theme === 'dark' ? '亮色' : '暗色'}</span>}
           </button>
           
           <button
             onClick={toggleSidebar}
             title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            className="hidden lg:flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-gray-500 dark:text-dark-400 hover:bg-gray-50 dark:hover:bg-dark-800 hover:text-gray-700 dark:hover:text-white transition-colors w-full"
+            className="hidden lg:flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium text-gray-500 dark:text-dark-400 hover:bg-gray-50 dark:hover:bg-dark-800 hover:text-gray-700 dark:hover:text-white transition-colors w-full"
           >
             {sidebarCollapsed ? <PanelLeft className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
-            {!sidebarCollapsed && <span>收起侧边栏</span>}
+            {!sidebarCollapsed && <span>收起</span>}
           </button>
 
           <button
             onClick={() => { logout(); navigate('/login') }}
             title={sidebarCollapsed ? "退出登录" : undefined}
-            className="flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-gray-400 dark:text-dark-500 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors w-full"
+            className="flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium text-gray-400 dark:text-dark-500 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors w-full"
           >
             <LogOut className="h-[18px] w-[18px] flex-shrink-0" />
             {!sidebarCollapsed && <span>退出</span>}

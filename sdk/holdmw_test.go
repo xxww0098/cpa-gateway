@@ -85,6 +85,22 @@ func (m *holdLedgerMock) Release(ctx context.Context, userID uint, requestID str
 	return m.ReleaseErr
 }
 
+// ActiveHoldAmount satisfies the BillingLedger interface added in Stage 2
+// (task 5.1). The HoldMiddleware tests in this file do not exercise the
+// fallback-settlement path that consumes this value, so the mock returns
+// (0, false, nil) — equivalent to "no hold recorded".
+func (m *holdLedgerMock) ActiveHoldAmount(_ context.Context, _ uint, _ string) (float64, bool, error) {
+	return 0, false, nil
+}
+
+// HasUnresolvedShortfall satisfies the BillingLedger interface extension
+// added in task 1.6. The HoldMiddleware unit tests in this file do not
+// populate any BalanceLog shortfall rows, so a (false, nil) stub is the
+// correct default.
+func (m *holdLedgerMock) HasUnresolvedShortfall(_ context.Context, _ uint) (bool, error) {
+	return false, nil
+}
+
 // holdCalcMock returns a constant estimate so tests can reason precisely
 // about quota arithmetic. Stream and rateMult are recorded for
 // assertions but do not change the returned value.
@@ -106,6 +122,16 @@ func (m *holdCalcMock) Estimate(modelID string, stream bool, rateMult float64) f
 	m.mu.Lock()
 	m.EstimateArgs = append(m.EstimateArgs, estimateArgsMW{Model: modelID, Stream: stream, RateMult: rateMult})
 	m.mu.Unlock()
+	return m.EstimateValue
+}
+
+// EstimateWithMaxTokens satisfies the PricingCalculator interface extension
+// introduced in task 6.1. The HoldMiddleware preflight (task 6.4) calls this
+// before every Hold, so the mock must return a stable value. Returning the
+// same EstimateValue keeps the preflight upper bound equal to the single
+// Estimate value these tests exercise — the existing assertions continue to
+// hold.
+func (m *holdCalcMock) EstimateWithMaxTokens(modelID string, _ int64, stream bool, rateMult float64) float64 {
 	return m.EstimateValue
 }
 

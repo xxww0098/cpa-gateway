@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { FileText, Coins, DollarSign, Clock } from 'lucide-react'
 import type { UsageStatsCardsProps } from '../types'
 
@@ -20,7 +21,7 @@ function fmtCost(n: number): string {
   return `$${n.toFixed(4)}`
 }
 
-export function UsageStatsCards({ stats }: UsageStatsCardsProps) {
+export const UsageStatsCards = memo(function UsageStatsCards({ stats }: UsageStatsCardsProps) {
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       {/* Total Requests */}
@@ -97,4 +98,4 @@ export function UsageStatsCards({ stats }: UsageStatsCardsProps) {
       </div>
     </div>
   )
-}
+})

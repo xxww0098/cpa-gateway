@@ -692,6 +692,12 @@ func (e *VertexExecutor) publishUsageRecord(ctx context.Context, auth *cliproxya
 	if failed && statusCode > 0 {
 		rec.Fail = cliproxyusage.Failure{StatusCode: statusCode}
 	}
+	// Propagate the "did we parse a terminal upstream usage envelope?" signal
+	// through the ctx the cliproxy manager hands to UsagePlugin.HandleUsage.
+	// Vertex's streamGenerateContent / non-stream responses normally carry a
+	// usageMetadata envelope, so `hasTokens` is typically true — but we thread
+	// the parser's bool through unmodified (Requirement 1.1).
+	ctx = WithUsageDetailPresent(ctx, hasTokens)
 	cliproxyusage.PublishRecord(ctx, rec)
 }
 

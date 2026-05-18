@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -82,14 +83,101 @@ func (pr *PanelRouter) AuthMiddleware() gin.HandlerFunc {
 				return
 			}
 			bc.UserID = claims.UserID
-			bc.Email = claims.Email
+			// The JWT email claim is presentation data, not an authorization
+			// source. Handlers that need trusted identity state must load it by
+			// user_id from the database.
 			bc.Status = "active"
 			bc.AuthType = authTypeJWT
+		}
+
+		// User-status recheck (Requirement 4.3/4.4/4.7, Property 11). The
+		// primary credential check may succeed against a stale APIKeyCache
+		// entry or against a JWT issued before the owning user was
+		// suspended/deleted. userIsActive re-confirms the DB-side status
+		// via the shared UserStatusCache so a flip observed on /v1/* is
+		// immediately honored on /api/panel/** and vice versa.
+		//
+		// API Key path: if the cached ApiKey.Status is already non-active
+		// (e.g. admin disabled the key between cache populations), reject
+		// with the same opaque invalid_credentials body before user-status
+		// lookup — we do not need to hit the DB to know the key is dead.
+		//
+		// JWT path: the claims have no Status field, so we always go through
+		// userIsActive.
+		if bc.Status != "" && bc.Status != userStatusActive {
+			slog.Info("panel_auth_rejected_inactive_api_key",
+				"event", "user_inactive",
+				"auth_type", bc.AuthType,
+				"user_id", bc.UserID,
+				"api_key_status", bc.Status,
+			)
+			Error(c, http.StatusUnauthorized, middlewareErrorUnauthorized, "invalid_credentials")
+			c.Abort()
+			return
+		}
+		if bc.AuthType == authTypeJWT {
+			if !pr.userIsActive(c.Request.Context(), bc.UserID) {
+				slog.Info("panel_auth_rejected_inactive_jwt",
+					"event", "user_inactive",
+					"auth_type", bc.AuthType,
+					"user_id", bc.UserID,
+				)
+				Error(c, http.StatusUnauthorized, middlewareErrorUnauthorized, "invalid_credentials")
+				c.Abort()
+				return
+			}
 		}
 
 		setBillingContext(c, bc)
 		c.Next()
 	}
+}
+
+// userIsActive reports whether the user row for userID currently has
+// Status == userStatusActive. It mirrors sdk/access.go's userIsActive
+// (they share the injected UserStatusCache instance) so a status flip
+// observed by either surface shows up on the other within the TTL.
+//
+// Lookup order:
+//  1. UserStatusCache — O(1) in-memory hit.
+//  2. SELECT status FROM users WHERE id = ? — single-column DB read on miss.
+//
+// Negative results are cached alongside positive ones so a credential-
+// guessing burst against the same bogus userID does not hammer the DB.
+// Transient DB errors are not cached (return false without updating the
+// cache) so a connectivity blip does not pin a live user into "inactive"
+// for the full TTL.
+func (pr *PanelRouter) userIsActive(ctx context.Context, userID uint) bool {
+	if pr == nil || pr.DB == nil || userID == 0 {
+		return false
+	}
+
+	if pr.UserStatusCache != nil {
+		if us, ok := pr.UserStatusCache.Get(userID); ok {
+			return us.Status == userStatusActive
+		}
+	}
+
+	var status string
+	err := pr.DB.WithContext(ctx).
+		Model(&model.User{}).
+		Select("status").
+		Where("id = ?", userID).
+		Limit(1).
+		Scan(&status).Error
+	if err != nil {
+		return false
+	}
+
+	cached := status
+	if cached == "" {
+		cached = "missing"
+	}
+	if pr.UserStatusCache != nil {
+		pr.UserStatusCache.Set(userID, cached, 5*time.Minute)
+	}
+
+	return status == userStatusActive
 }
 
 // TraceIDMiddleware passes through or generates X-Trace-ID for every request.
@@ -190,6 +278,59 @@ func (pr *PanelRouter) validateAPIKey(ctx context.Context, plaintext string) (*i
 	return cached, nil
 }
 
+// invalidateUserCaches flushes both L1 caches for the given user. Called by
+// admin paths that flip a user's status or delete a user so the next auth
+// attempt re-reads the database instead of seeing a stale "active" entry.
+//
+// Order of operations (design.md §"Admin delete hook"):
+//  1. Drop the UserStatusCache entry so JWT-path user-status rechecks fall
+//     through to the DB on the next request.
+//  2. Enumerate every api_keys row for the user (no status filter — already
+//     deleted or suspended keys may still be cached) and drop each cached
+//     entry keyed by key_hash.
+//
+// Both caches are nil-safe: if the router was constructed without a cache
+// (tests that do not exercise recheck paths), the corresponding step is a
+// no-op. A DB failure at step 2 is logged and swallowed; step 1 must still
+// run so that at least the status recheck path is forced to re-read. This
+// keeps the admin handler progressable even under transient DB errors.
+func (pr *PanelRouter) invalidateUserCaches(ctx context.Context, userID uint) {
+	if pr == nil {
+		return
+	}
+
+	// Step 1: flush user-status cache unconditionally so that JWT recheck
+	// (middleware) and sdk.AccessProvider both observe the DB-side change.
+	if pr.UserStatusCache != nil {
+		pr.UserStatusCache.InvalidateUser(userID)
+	}
+
+	// Step 2: flush every cached API-key entry that belongs to this user.
+	// We purposefully SELECT all rows (no status='active' filter) so that
+	// keys flipped to deleted/suspended prior to this call are also evicted.
+	// The api_keys row itself is not modified here.
+	if pr.APIKeyCache == nil || pr.DB == nil {
+		return
+	}
+
+	var keyHashes []string
+	if err := pr.DB.WithContext(ctx).
+		Model(&model.ApiKey{}).
+		Where("user_id = ?", userID).
+		Pluck("key_hash", &keyHashes).Error; err != nil {
+		slog.Warn("invalidate_user_caches_db_failed",
+			"event", "invalidate_user_caches_db_failed",
+			"user_id", userID,
+			"err", err,
+		)
+		return
+	}
+
+	for _, h := range keyHashes {
+		pr.APIKeyCache.Delete(h)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Shared helpers
 // -----------------------------------------------------------------------------
@@ -244,6 +385,31 @@ type rateLimitBucket struct {
 }
 
 var userLimiters sync.Map
+
+func init() {
+	// Periodically evict stale rate-limit buckets to prevent unbounded
+	// memory growth from unique client identities.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			cutoff := time.Now().UTC().Truncate(time.Minute)
+			userLimiters.Range(func(key, value any) bool {
+				bucket, ok := value.(*rateLimitBucket)
+				if !ok {
+					userLimiters.Delete(key)
+					return true
+				}
+				bucket.mu.Lock()
+				stale := bucket.window.Before(cutoff)
+				bucket.mu.Unlock()
+				if stale {
+					userLimiters.Delete(key)
+				}
+				return true
+			})
+		}
+	}()
+}
 
 func allowRequest(identity string, capacity int) bool {
 	if identity == "" {

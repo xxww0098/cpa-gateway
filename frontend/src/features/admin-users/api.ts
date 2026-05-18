@@ -1,22 +1,16 @@
-import { fetchApi } from '@/shared/api/client'
+import { apiClient } from '@/shared/api/client'
+import type { PaginatedResponse } from '@/shared/types/api'
 import type {
+  UserItem,
   ManagedApiKey,
   BalanceHistoryEntry,
-  PageData,
   CreateUserPayload,
   UpdateUserPayload,
   DepositPayload,
+  LoadUsersParams,
 } from './types'
 
-export interface LoadUsersParams {
-  page: number
-  pageSize?: number
-  search?: string
-  role?: string
-  status?: string
-}
-
-export async function loadUsers(params: LoadUsersParams): Promise<PageData> {
+export async function loadUsers(params: LoadUsersParams): Promise<PaginatedResponse<UserItem>> {
   const { page, pageSize = 15, search, role, status } = params
   const qs = new URLSearchParams()
   qs.set('page', String(page))
@@ -25,43 +19,30 @@ export async function loadUsers(params: LoadUsersParams): Promise<PageData> {
   if (role) qs.set('role', role)
   if (status) qs.set('status', status)
 
-  const res = await fetchApi(`/admin/users?${qs.toString()}`)
-  return res.data as PageData
+  return apiClient.get<PaginatedResponse<UserItem>>(`/admin/users?${qs.toString()}`)
 }
 
 export async function createUser(payload: CreateUserPayload): Promise<void> {
-  await fetchApi('/admin/users', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
+  await apiClient.post('/admin/users', payload)
 }
 
 export async function updateUser(id: number, payload: UpdateUserPayload): Promise<void> {
-  await fetchApi(`/admin/users/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  })
+  await apiClient.put(`/admin/users/${id}`, payload)
 }
 
 export async function deleteUser(id: number): Promise<void> {
-  await fetchApi(`/admin/users/${id}`, {
-    method: 'DELETE',
-  })
+  await apiClient.delete(`/admin/users/${id}`)
 }
 
 export async function depositUser(id: number, payload: DepositPayload): Promise<void> {
-  await fetchApi(`/admin/users/${id}/deposit`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
+  await apiClient.post(`/admin/users/${id}/deposit`, payload)
 }
 
 export async function getUserApiKeys(id: number): Promise<ManagedApiKey[]> {
-  const res = await fetchApi(`/admin/users/${id}/api-keys`)
-  return (res.data as ManagedApiKey[]) || []
+  return apiClient.get<ManagedApiKey[]>(`/admin/users/${id}/api-keys`)
 }
 
 export async function getUserBalanceHistory(id: number): Promise<BalanceHistoryEntry[]> {
-  const res = await fetchApi(`/admin/users/${id}/balance-history`)
-  return res.data?.entries || []
+  const res = await apiClient.get<{ entries: BalanceHistoryEntry[] }>(`/admin/users/${id}/balance-history`)
+  return res?.entries || []
 }

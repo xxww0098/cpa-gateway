@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useState, useCallback, useMemo, useRef } from "react"
 import { toast } from "sonner"
 import {
   RefreshCw, Search, UserPlus, MoreHorizontal,
@@ -6,9 +6,10 @@ import {
   ShieldCheck, ChevronLeft, ChevronRight
 } from "lucide-react"
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
-import { deleteUser, loadUsers } from "@/features/admin-users/api"
+import { useUsers, useDeleteUser } from "@/features/admin-users/hooks"
 import type { UserItem } from "@/features/admin-users/types"
 import { confirmModal } from "@/shared/confirm-modal"
+import { QueryStateWrapper } from "@/shared/components/QueryStateWrapper"
 import { AdminUserCreateDialog } from "@/features/admin-users/components/AdminUserCreateDialog"
 import { AdminUserEditDialog } from "@/features/admin-users/components/AdminUserEditDialog"
 import { AdminUserDepositDialog } from "@/features/admin-users/components/AdminUserDepositDialog"
@@ -16,19 +17,30 @@ import { AdminUserApiKeysDialog } from "@/features/admin-users/components/AdminU
 import { AdminUserHistoryDialog } from "@/features/admin-users/components/AdminUserHistoryDialog"
 
 export default function AdminUsersPage() {
-  // List state
-  const [users, setUsers] = useState<UserItem[]>([])
-  const [loading, setLoading] = useState(true)
+  // Pagination & filters
   const [page, setPage] = useState(1)
-  const [totalPages, setTotalPages] = useState(1)
-  const [totalUsers, setTotalUsers] = useState(0)
-
-  // Filters
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [filterRole, setFilterRole] = useState("")
   const [filterStatus, setFilterStatus] = useState("")
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Query
+  const { data, isLoading: loading, refetch } = useUsers({
+    page,
+    pageSize: 15,
+    search: debouncedSearch || undefined,
+    role: filterRole || undefined,
+    status: filterStatus || undefined,
+  })
+
+  const users = data?.items ?? []
+  const totalUsers = data?.total ?? 0
+  const pageSize = data?.page_size ?? 15
+  const totalPages = Math.max(1, Math.ceil(totalUsers / pageSize))
+
+  // Mutations
+  const deleteUserMutation = useDeleteUser()
 
   // Dialog states
   const [showCreate, setShowCreate] = useState(false)
@@ -40,69 +52,38 @@ export default function AdminUsersPage() {
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set())
   const [batchDeleting, setBatchDeleting] = useState(false)
 
-  // ── Load users ──
-  const fetchUserList = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true)
-    try {
-      const data = await loadUsers({
-        page,
-        pageSize: 15,
-        search: debouncedSearch,
-        role: filterRole || undefined,
-        status: filterStatus || undefined,
-      })
-      setUsers(Array.isArray(data.items) ? data.items : [])
-      setTotalUsers(data.total || 0)
-      setTotalPages(Math.max(1, Math.ceil((data.total || 0) / (data.page_size || 15))))
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "无法加载用户列表")
-    } finally {
-      setLoading(false)
-    }
-  }, [page, debouncedSearch, filterRole, filterStatus])
-
-  useEffect(() => { fetchUserList() }, [fetchUserList])
-  useEffect(() => {
-    const visibleIds = new Set(users.map(u => u.id))
-    setSelectedUserIds(prev => {
-      const next = new Set(Array.from(prev).filter(id => visibleIds.has(id)))
-      return next.size === prev.size ? prev : next
-    })
-  }, [users])
-
   // Search debounce
-  const handleSearchInput = (value: string) => {
+  const handleSearchInput = useCallback((value: string) => {
     setSearchQuery(value)
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
     searchTimeoutRef.current = setTimeout(() => {
       setDebouncedSearch(value.trim())
       setPage(1)
     }, 300)
-  }
+  }, [])
 
-  // Dialog helpers
-  const openEdit = (u: UserItem) => { setActionUser(u); setShowEdit(true) }
-  const openDeposit = (u: UserItem) => { setActionUser(u); setShowDeposit(true) }
-  const openKeys = (u: UserItem) => { setActionUser(u); setShowKeys(true) }
-  const openHistory = (u: UserItem) => { setActionUser(u); setShowHistory(true) }
-  const selectedVisibleCount = users.filter(u => selectedUserIds.has(u.id)).length
-  const allVisibleSelected = users.length > 0 && selectedVisibleCount === users.length
-  const selectionIndeterminate = selectedVisibleCount > 0 && selectedVisibleCount < users.length
-  const handleSelectAllVisible = (checked: boolean) => {
+  // Dialog helpers — memoized to avoid re-creating on every render
+  const openEdit = useCallback((u: UserItem) => { setActionUser(u); setShowEdit(true) }, [])
+  const openDeposit = useCallback((u: UserItem) => { setActionUser(u); setShowDeposit(true) }, [])
+  const openKeys = useCallback((u: UserItem) => { setActionUser(u); setShowKeys(true) }, [])
+  const openHistory = useCallback((u: UserItem) => { setActionUser(u); setShowHistory(true) }, [])
+
+  // Selection — memoized derived values
+  const selectedVisibleCount = useMemo(() => users.filter(u => selectedUserIds.has(u.id)).length, [users, selectedUserIds])
+  const allVisibleSelected = useMemo(() => users.length > 0 && selectedVisibleCount === users.length, [users.length, selectedVisibleCount])
+  const selectionIndeterminate = useMemo(() => selectedVisibleCount > 0 && selectedVisibleCount < users.length, [selectedVisibleCount, users.length])
+  const handleSelectAllVisible = useCallback((checked: boolean) => {
     setSelectedUserIds(checked ? new Set(users.map(u => u.id)) : new Set())
-  }
-  const handleSelectUser = (id: number, checked: boolean) => {
+  }, [users])
+  const handleSelectUser = useCallback((id: number, checked: boolean) => {
     setSelectedUserIds(prev => {
       const next = new Set(prev)
-      if (checked) {
-        next.add(id)
-      } else {
-        next.delete(id)
-      }
+      if (checked) { next.add(id) } else { next.delete(id) }
       return next
     })
-  }
-  const handleDeleteUser = async (u: UserItem) => {
+  }, [])
+
+  const handleDeleteUser = useCallback(async (u: UserItem) => {
     const ok = await confirmModal({
       title: "删除用户",
       message: `删除用户 ${u.email}？\n该用户将从列表移除，CPA API Key 会同时禁用。`,
@@ -112,19 +93,18 @@ export default function AdminUsersPage() {
     })
     if (!ok) return
     try {
-      await deleteUser(u.id)
-      toast.success("用户已删除")
+      await deleteUserMutation.mutateAsync(u.id)
       setSelectedUserIds(prev => {
         const next = new Set(prev)
         next.delete(u.id)
         return next
       })
-      await fetchUserList(true)
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "删除失败")
+    } catch {
+      // Error toast handled by hook
     }
-  }
-  const handleBatchDelete = async () => {
+  }, [deleteUserMutation])
+
+  const handleBatchDelete = useCallback(async () => {
     const targets = users.filter(u => selectedUserIds.has(u.id))
     if (targets.length === 0) return
     const preview = targets.slice(0, 3).map(u => u.email).join("、")
@@ -144,15 +124,13 @@ export default function AdminUsersPage() {
     try {
       for (const u of targets) {
         try {
-          await deleteUser(u.id)
+          await deleteUserMutation.mutateAsync(u.id)
           successCount++
-        } catch (err) {
-          console.error(`Failed to delete user ${u.id}`, err)
+        } catch {
           failCount++
         }
       }
       setSelectedUserIds(new Set())
-      await fetchUserList(true)
       if (failCount === 0) {
         toast.success(`成功删除 ${successCount} 位用户`)
       } else {
@@ -161,7 +139,7 @@ export default function AdminUsersPage() {
     } finally {
       setBatchDeleting(false)
     }
-  }
+  }, [users, selectedUserIds, deleteUserMutation])
 
   // ── Render ──
   return (
@@ -218,7 +196,7 @@ export default function AdminUsersPage() {
           </select>
           <button
             className="btn btn-secondary h-9 px-3 text-sm shadow-none"
-            onClick={() => fetchUserList(false)}
+            onClick={() => refetch()}
             disabled={loading}
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -244,6 +222,13 @@ export default function AdminUsersPage() {
 
       {/* Data Table */}
       <div className="glass-card overflow-hidden">
+        <QueryStateWrapper
+          isLoading={loading}
+          error={data === undefined && !loading ? new Error('加载用户列表失败') : null}
+          isEmpty={!loading && users.length === 0}
+          onRetry={() => refetch()}
+          emptyMessage={debouncedSearch || filterRole || filterStatus ? "无匹配结果，请调整筛选条件" : "暂无注册用户"}
+        >
         <div className="overflow-x-auto">
           <table className="table">
             <thead>
@@ -273,20 +258,7 @@ export default function AdminUsersPage() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={8} className="h-40 text-center">
-                    <RefreshCw className="h-5 w-5 animate-spin mx-auto text-primary-500" />
-                  </td>
-                </tr>
-              ) : users.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="h-40 text-center text-gray-500">
-                    {debouncedSearch || filterRole || filterStatus ? "无匹配结果，请调整筛选条件" : "暂无注册用户"}
-                  </td>
-                </tr>
-              ) : (
-                users.map((u) => (
+              {users.map((u) => (
                   <tr key={u.id} className="group">
                     <td>
                       <div className="flex items-center justify-center">
@@ -375,10 +347,11 @@ export default function AdminUsersPage() {
                     </td>
                   </tr>
                 ))
-              )}
+              }
             </tbody>
           </table>
         </div>
+        </QueryStateWrapper>
 
         {/* Pagination */}
         {totalPages > 1 && (
@@ -427,9 +400,9 @@ export default function AdminUsersPage() {
       </div>
 
       {/* Dialogs */}
-      <AdminUserCreateDialog open={showCreate} onOpenChange={setShowCreate} onSuccess={() => { setPage(1); fetchUserList() }} />
-      <AdminUserEditDialog open={showEdit} onOpenChange={setShowEdit} user={actionUser} onSuccess={() => fetchUserList(true)} />
-      <AdminUserDepositDialog open={showDeposit} onOpenChange={setShowDeposit} user={actionUser} onSuccess={() => fetchUserList(true)} />
+      <AdminUserCreateDialog open={showCreate} onOpenChange={setShowCreate} />
+      <AdminUserEditDialog open={showEdit} onOpenChange={setShowEdit} user={actionUser} />
+      <AdminUserDepositDialog open={showDeposit} onOpenChange={setShowDeposit} user={actionUser} />
       <AdminUserApiKeysDialog open={showKeys} onOpenChange={setShowKeys} user={actionUser} />
       <AdminUserHistoryDialog open={showHistory} onOpenChange={setShowHistory} user={actionUser} />
     </div>

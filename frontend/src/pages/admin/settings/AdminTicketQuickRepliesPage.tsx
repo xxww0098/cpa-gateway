@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { fetchApi } from "@/shared/api/client"
 import { DEFAULT_TICKET_QUICK_REPLIES } from "@/shared/constants/ticketQuickReplyDefaults"
+import { errorMessage } from "@/shared/api/errors"
 import { Button } from "@/shared/components/ui/button"
 import { Input } from "@/shared/components/ui/input"
 import { Textarea } from "@/shared/components/ui/textarea"
 import { toast } from "sonner"
 import { Plus, Trash2, Save } from "lucide-react"
+import { fetchTicketQuickReplies, saveTicketQuickReplies } from "@/features/tickets/api"
+import type { TicketQuickReplyItem } from "@/features/tickets/types"
 
-export type TicketQuickReplyItem = { label: string; text: string }
+export type { TicketQuickReplyItem } from "@/features/tickets/types"
 
 type RowItem = TicketQuickReplyItem & { id: string }
 
@@ -41,11 +43,11 @@ export default function AdminTicketQuickRepliesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchApi("/admin/ticket-quick-replies")
-      const list = (res?.data?.items as TicketQuickReplyItem[]) || []
+      const res = await fetchTicketQuickReplies()
+      const list = res?.items || []
       setItems(toRows(list.length > 0 ? list : [...DEFAULT_TICKET_QUICK_REPLIES]))
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "加载失败")
+      toast.error(errorMessage(e, "加载失败"))
       setItems(toRows([...DEFAULT_TICKET_QUICK_REPLIES]))
     } finally {
       setLoading(false)
@@ -116,15 +118,12 @@ export default function AdminTicketQuickRepliesPage() {
 
     setSaving(true)
     try {
-      const res = await fetchApi("/admin/ticket-quick-replies", {
-        method: "POST",
-        body: JSON.stringify({ items: clean }),
-      })
-      const saved = (res?.data?.items as TicketQuickReplyItem[]) || clean
+      const res = await saveTicketQuickReplies(clean)
+      const saved = res?.items || clean
       setItems(toRows(saved.length > 0 ? saved : [...DEFAULT_TICKET_QUICK_REPLIES]))
       toast.success("已保存")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "保存失败")
+      toast.error(errorMessage(e, "保存失败"))
     } finally {
       setSaving(false)
     }

@@ -1,36 +1,15 @@
-import { useState, useEffect, useCallback } from 'react'
-import { fetchApi } from '@/shared/api/client'
+import { useState, useCallback, useMemo } from 'react'
 import { useAuthStore } from '@/features/auth/auth_store'
+import { useAdminUsageLogs, useInvalidateUsageLogs } from '@/features/usage/hooks'
+import { fetchAdminUsageLogs } from '@/features/usage/api'
+import type { AdminUsageLog, AdminUsageLogsFilter, DateRangePreset } from '@/features/usage/types'
+import { QueryStateWrapper } from '@/shared/components/QueryStateWrapper'
 import { toast } from 'sonner'
 import {
-  FileText, Search, RefreshCw, Download,
+  Search, RefreshCw, Download,
   ChevronLeft, ChevronRight, CheckCircle2, XCircle,
   ArrowDownCircle, ArrowUpCircle, X, Info, Database, Brain
 } from 'lucide-react'
-
-interface UsageLog {
-  id: number
-  request_id: string
-  user_id: number
-  user_email?: string
-  api_key_id: number
-  api_key_name?: string
-  model: string
-  provider: string
-  input_tokens: number
-  output_tokens: number
-  reasoning_tokens: number
-  cached_tokens: number
-  input_cost: number
-  output_cost: number
-  total_cost: number
-  actual_cost: number
-  rate_multiplier: number
-  stream: boolean
-  duration_ms: number | null
-  failed: boolean
-  created_at: string
-}
 
 function fmtDuration(ms: number | null): string {
   if (ms == null) return '-'
@@ -66,8 +45,17 @@ function daysAgo(n: number): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
+function getDateRange(preset: DateRangePreset): { startDate: string; endDate: string } {
+  const endDate = todayStr()
+  let startDate: string
+  if (preset === 'today') startDate = todayStr()
+  else if (preset === '7d') startDate = daysAgo(6)
+  else startDate = daysAgo(29)
+  return { startDate, endDate }
+}
+
 // Token detail tooltip
-interface TokenTooltipData { log: UsageLog; x: number; y: number }
+interface TokenTooltipData { log: AdminUsageLog; x: number; y: number }
 
 function TokenTooltip({ data }: { data: TokenTooltipData }) {
   const { log } = data
@@ -116,7 +104,7 @@ function TokenTooltip({ data }: { data: TokenTooltipData }) {
 }
 
 // Cost tooltip
-interface CostTooltipData { log: UsageLog; x: number; y: number }
+interface CostTooltipData { log: AdminUsageLog; x: number; y: number }
 
 function CostTooltip({ data }: { data: CostTooltipData }) {
   const { log } = data
@@ -161,73 +149,66 @@ export default function AdminUsageLogs() {
   const user = useAuthStore(s => s.user)
   const isAdmin = user?.role === 'admin'
 
-  const [logs, setLogs] = useState<UsageLog[]>([])
-  const [loading, setLoading] = useState(true)
-  const [exporting, setExporting] = useState(false)
-
   // Filters
   const [filterModel, setFilterModel] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  const [dateRange, setDateRange] = useState<'today' | '7d' | '30d'>('7d')
-  const [costTooltip, setCostTooltip] = useState<CostTooltipData | null>(null)
-  const [tokenTooltip, setTokenTooltip] = useState<TokenTooltipData | null>(null)
+  const [dateRange, setDateRange] = useState<DateRangePreset>('7d')
 
   // Pagination
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
-  const [total, setTotal] = useState(0)
 
-  const buildParams = useCallback((p: number, ps: number) => {
-    const params = new URLSearchParams()
-    params.set('page', String(p))
-    params.set('page_size', String(ps))
-    if (filterModel.trim()) params.set('model', filterModel.trim())
-    if (filterStatus) params.set('status', filterStatus)
-    
-    let sd: string, ed: string
-    if (dateRange === 'today') { sd = todayStr(); ed = todayStr() }
-    else if (dateRange === '7d') { sd = daysAgo(6); ed = todayStr() }
-    else { sd = daysAgo(29); ed = todayStr() }
-    params.set('start_date', sd)
-    params.set('end_date', ed)
-    return params.toString()
-  }, [filterModel, filterStatus, dateRange])
+  // Tooltips
+  const [costTooltip, setCostTooltip] = useState<CostTooltipData | null>(null)
+  const [tokenTooltip, setTokenTooltip] = useState<TokenTooltipData | null>(null)
 
-  const loadData = useCallback(async (p = page, ps = pageSize) => {
-    setLoading(true)
-    try {
-      const qs = buildParams(p, ps)
-      const res = await fetchApi(`/admin/usage-logs?${qs}`)
-      if (res?.data) {
-        setLogs(res.data.items || [])
-        setTotal(res.data.total || 0)
-        setPage(res.data.page || p)
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '加载失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [buildParams, page, pageSize])
+  // Export state
+  const [exporting, setExporting] = useState(false)
 
-  useEffect(() => { loadData(1) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Build filter for the hook
+  const { startDate, endDate } = useMemo(() => getDateRange(dateRange), [dateRange])
 
-  const handleFilter = () => { setPage(1); loadData(1) }
-  const handlePageChange = (p: number) => { setPage(p); loadData(p) }
+  const filter: AdminUsageLogsFilter = useMemo(() => ({
+    page,
+    pageSize,
+    model: filterModel.trim() || undefined,
+    status: filterStatus || undefined,
+    startDate,
+    endDate,
+  }), [page, pageSize, filterModel, filterStatus, startDate, endDate])
+
+  // Use the standardized hook
+  const { logs, total, loading, refetch } = useAdminUsageLogs(filter)
+  const invalidateUsageLogs = useInvalidateUsageLogs()
+
   const totalPages = Math.ceil(total / pageSize)
 
+  const handleFilter = useCallback(() => {
+    setPage(1)
+  }, [])
+
+  const handlePageChange = useCallback((p: number) => {
+    setPage(p)
+  }, [])
+
   // CSV Export
-  const handleExport = async () => {
+  const handleExport = useCallback(async () => {
     if (total === 0) return
     setExporting(true)
     try {
-      const allLogs: UsageLog[] = []
+      const allLogs: AdminUsageLog[] = []
       const ps = 100
       const pages = Math.ceil(Math.min(total, 5000) / ps)
       for (let p = 1; p <= pages; p++) {
-        const qs = buildParams(p, ps)
-        const res = await fetchApi(`/admin/usage-logs?${qs}`)
-        if (res?.data?.items) allLogs.push(...res.data.items)
+        const res = await fetchAdminUsageLogs({
+          page: p,
+          pageSize: ps,
+          model: filterModel.trim() || undefined,
+          status: filterStatus || undefined,
+          startDate,
+          endDate,
+        })
+        if (res?.items) allLogs.push(...res.items)
       }
       const header = '时间,用户,API Key,模型,Provider,类型,输入Tokens,输出Tokens,推理Tokens,缓存Tokens,标准费用,实际扣费,倍率,耗时(ms),状态\n'
       const rows = allLogs.map(l => [
@@ -244,7 +225,7 @@ export default function AdminUsageLogs() {
       URL.revokeObjectURL(url)
       toast.success(`导出 ${allLogs.length} 条`)
     } catch { toast.error('导出失败') } finally { setExporting(false) }
-  }
+  }, [total, filterModel, filterStatus, startDate, endDate, dateRange])
 
   if (!isAdmin) {
     return <div className="text-center py-20 text-gray-400">无权限访问此页面</div>
@@ -277,7 +258,7 @@ export default function AdminUsageLogs() {
           </div>
           <div>
             <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1 block">状态</label>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input h-9 text-sm w-[100px]">
+            <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1) }} className="input h-9 text-sm w-[100px]">
               <option value="">全部</option>
               <option value="success">成功</option>
               <option value="failed">失败</option>
@@ -287,7 +268,7 @@ export default function AdminUsageLogs() {
             <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1 block">范围</label>
             <div className="flex gap-1">
               {([{ k: 'today' as const, l: '今天' }, { k: '7d' as const, l: '7天' }, { k: '30d' as const, l: '30天' }]).map(r => (
-                <button key={r.k} onClick={() => { setDateRange(r.k); setTimeout(() => { setPage(1); loadData(1) }, 0) }}
+                <button key={r.k} onClick={() => { setDateRange(r.k); setPage(1) }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     dateRange === r.k ? 'bg-primary-500 text-white shadow-sm' : 'bg-gray-100 dark:bg-dark-800 text-gray-600 dark:text-gray-400'
                   }`}
@@ -296,7 +277,7 @@ export default function AdminUsageLogs() {
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={handleFilter} disabled={loading} className="btn btn-secondary h-9 px-3 text-xs">
+            <button onClick={() => { invalidateUsageLogs(); refetch() }} disabled={loading} className="btn btn-secondary h-9 px-3 text-xs">
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> 刷新
             </button>
             <button onClick={handleExport} disabled={exporting || total === 0} className="btn btn-primary h-9 px-3 text-xs">
@@ -309,6 +290,12 @@ export default function AdminUsageLogs() {
 
       {/* Table */}
       <div className="glass-card overflow-hidden">
+        <QueryStateWrapper
+          isLoading={loading}
+          isEmpty={!loading && logs.length === 0}
+          onRetry={() => { invalidateUsageLogs(); refetch() }}
+          emptyMessage="暂无使用记录"
+        >
         <div className="overflow-x-auto">
           <table className="table">
             <thead>
@@ -325,20 +312,7 @@ export default function AdminUsageLogs() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
-                <tr><td colSpan={9} className="h-40 text-center">
-                  <div className="flex items-center justify-center gap-2 text-gray-400">
-                    <RefreshCw className="w-4 h-4 animate-spin text-primary-500" /> 加载中...
-                  </div>
-                </td></tr>
-              ) : logs.length === 0 ? (
-                <tr><td colSpan={9} className="h-40 text-center text-gray-400 dark:text-dark-500">
-                  <div className="flex flex-col items-center gap-2">
-                    <FileText className="w-10 h-10 opacity-30" />
-                    <span>暂无使用记录</span>
-                  </div>
-                </td></tr>
-              ) : logs.map(log => (
+              {logs.map(log => (
                 <tr key={log.id} className="group">
                   <td>
                     <span className="text-sm text-gray-900 dark:text-white truncate block max-w-[140px]" title={log.user_email}>
@@ -417,13 +391,14 @@ export default function AdminUsageLogs() {
             </tbody>
           </table>
         </div>
+        </QueryStateWrapper>
 
         {/* Pagination */}
         {total > 0 && (
           <div className="px-5 py-3 border-t border-border flex items-center justify-between bg-gray-50/50 dark:bg-dark-800/30">
             <div className="text-xs text-gray-500 tabular-nums">共 {total.toLocaleString()} 条 · 第 {page}/{totalPages} 页</div>
             <div className="flex items-center gap-1.5">
-              <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); loadData(1, Number(e.target.value)) }}
+              <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1) }}
                 className="h-8 rounded-lg border border-border bg-white dark:bg-dark-900 px-2 text-xs outline-none"
               >
                 {[30, 50, 100].map(n => <option key={n} value={n}>{n} 条/页</option>)}

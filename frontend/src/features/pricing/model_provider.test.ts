@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeAll } from 'vitest'
 import {
   getModelRegistryMetadata,
   resolveModelProvider,
   getProviderForModelId,
+  loadModelRegistries,
   type ProviderAwareModel,
 } from './model_provider'
 
 describe('model_provider', () => {
+  beforeAll(async () => {
+    await loadModelRegistries()
+  })
   describe('getProviderForModelId', () => {
     it('returns the correct provider for known model ids', () => {
       // claude models should resolve to 'anthropic'

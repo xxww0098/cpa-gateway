@@ -2,10 +2,11 @@ import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import {
   RefreshCw, Trash2, ShieldCheck,
   Clock, MoreHorizontal, Play, Pause, AlertTriangle,
-  FileJson, Activity
+  FileJson, Activity, Download, Pencil
 } from 'lucide-react'
 import { resolveAuthFileIdentity } from '../authFileViewUtils'
 import type { AuthFileTableProps } from '../types'
+import { AuthProviderBrandIcon } from './AuthProviderBrandIcon'
 
 export function AuthFileTable({
   files,
@@ -19,8 +20,11 @@ export function AuthFileTable({
   onToggle,
   onDelete,
   onDetail,
+  onEdit,
+  onDownload,
   onLoadQuota,
   quotaLoading,
+  downloadLoading,
   providerBadgeColor,
   fmtRelative,
   stateInfo,
@@ -131,8 +135,11 @@ export function AuthFileTable({
                   {/* Account Info */}
                   <td className="px-4 py-2.5">
                     <div className="flex items-start gap-2.5 min-w-0">
-                      <div className={`h-7 w-7 rounded-lg flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5 ${providerBadgeColor(file.provider)}`}>
-                        {(file.provider || '?')[0].toUpperCase()}
+                      <div
+                        className="h-7 w-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 bg-gray-50 dark:bg-dark-800 border border-gray-100 dark:border-dark-700"
+                        title={file.provider || undefined}
+                      >
+                        <AuthProviderBrandIcon provider={file.provider} size={20} />
                       </div>
                       <div className="min-w-0 max-w-[320px]">
                         <div className="truncate font-medium text-[13px] leading-5 text-gray-900 dark:text-white" title={identity.primaryTitle}>
@@ -209,6 +216,19 @@ export function AuthFileTable({
                               ? <><Play className="h-4 w-4 text-emerald-500" /> 恢复调度</>
                               : <><Pause className="h-4 w-4 text-amber-500" /> 暂停调度</>
                             }
+                          </DropdownMenuPrimitive.Item>
+                          <DropdownMenuPrimitive.Item
+                            disabled={file.runtime_only === true}
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm cursor-pointer outline-none hover:bg-gray-100 dark:hover:bg-dark-700 text-gray-700 dark:text-gray-200 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
+                            onSelect={() => onEdit(file)}
+                          >
+                            <Pencil className="h-4 w-4 text-primary-500" /> 编辑凭证
+                          </DropdownMenuPrimitive.Item>
+                          <DropdownMenuPrimitive.Item
+                            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm cursor-pointer outline-none hover:bg-gray-100 dark:hover:bg-dark-700 text-gray-700 dark:text-gray-200"
+                            onSelect={() => onDownload(file)}
+                          >
+                            <Download className={`h-4 w-4 text-indigo-500 ${downloadLoading[file.name] ? 'animate-pulse' : ''}`} /> 下载 JSON
                           </DropdownMenuPrimitive.Item>
                           <DropdownMenuPrimitive.Item
                             className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-sky-600 dark:text-sky-400 cursor-pointer outline-none hover:bg-sky-50 dark:hover:bg-sky-900/20"

@@ -1,9 +1,9 @@
 import { Outlet, Navigate, useLocation } from 'react-router-dom'
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { Sidebar } from '@/shared/components/layout/Sidebar'
 import { Header } from '@/shared/components/layout/Header'
 import { useAuthStore } from '@/features/auth/auth_store'
-import { refreshCurrentUser } from '@/shared/api/client'
+import { useProfile } from '@/features/auth/hooks'
 import { useAppStore } from '@/shared/store/app_store'
 
 const adminRoutePrefixes = [
@@ -20,40 +20,19 @@ const adminRoutePrefixes = [
 export default function UserLayout() {
   const token = useAuthStore(s => s.token)
   const user = useAuthStore(s => s.user)
+  const updateUser = useAuthStore(s => s.updateUser)
   const sidebarCollapsed = useAppStore(s => s.sidebarCollapsed)
-  const lastFetchRef = useRef(0)
   const location = useLocation()
 
-  const refreshProfile = useCallback((force = false) => {
-    if (!token) return
-    const now = Date.now()
-    if (!force && now - lastFetchRef.current < 30_000) return
-    lastFetchRef.current = now
-    void refreshCurrentUser().catch(() => {})
-  }, [token])
+  // useProfile leverages react-query caching (staleTime: 5min) and auto-refetch
+  const { data: profileData } = useProfile()
 
-  // 路由切换时节流刷新 profile；余额相关操作会在成功回调中强制刷新。
+  // Sync profile data back to auth store when it changes
   useEffect(() => {
-    refreshProfile()
-  }, [location.pathname, refreshProfile])
-
-  useEffect(() => {
-    const refreshOnFocus = () => refreshProfile()
-    const refreshOnVisible = () => {
-      if (document.visibilityState === 'visible') refreshProfile()
+    if (profileData?.user) {
+      updateUser(profileData.user)
     }
-    const refreshTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') refreshProfile()
-    }, 30_000)
-
-    window.addEventListener('focus', refreshOnFocus)
-    document.addEventListener('visibilitychange', refreshOnVisible)
-    return () => {
-      window.clearInterval(refreshTimer)
-      window.removeEventListener('focus', refreshOnFocus)
-      document.removeEventListener('visibilitychange', refreshOnVisible)
-    }
-  }, [refreshProfile])
+  }, [profileData, updateUser])
 
   if (!token || !user) {
     return <Navigate to="/login" replace />
@@ -72,7 +51,7 @@ export default function UserLayout() {
       {/* Main Content Area */}
       <div 
         className={`flex-1 flex flex-col transition-all duration-300 ${
-          sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-60'
+          sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-48'
         }`}
       >
         <Header />

@@ -33,13 +33,6 @@ export interface BalanceHistoryEntry {
   created_at: string
 }
 
-export interface PageData {
-  items: UserItem[]
-  total: number
-  page: number
-  page_size: number
-}
-
 export interface CreateUserPayload {
   email: string
   password: string
@@ -60,4 +53,13 @@ export interface UpdateUserPayload {
 export interface DepositPayload {
   amount: number
   note?: string
+}
+
+/** Parameters for the paginated users list query */
+export interface LoadUsersParams {
+  page: number
+  pageSize?: number
+  search?: string
+  role?: string
+  status?: string
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"net/http"
 	"sort"
@@ -133,11 +134,6 @@ func (pr *PanelRouter) UserProfileHandler(c *gin.Context) {
 		return
 	}
 
-	if pr.isAdminEmail(user.Email) && user.Role != "admin" {
-		pr.DB.WithContext(c.Request.Context()).Model(&user).Update("role", "admin")
-		user.Role = "admin"
-	}
-
 	available := user.Balance
 	if pr.Ledger != nil {
 		balance, err := pr.Ledger.GetBalance(c.Request.Context(), user.ID)
@@ -245,14 +241,33 @@ func (pr *PanelRouter) DeleteAPIKeyHandler(c *gin.Context) {
 }
 
 func (pr *PanelRouter) AvailableGroupsHandler(c *gin.Context) {
-	if _, ok := pr.requireBillingCtx(c); !ok {
+	bc, ok := pr.requireBillingCtx(c)
+	if !ok {
 		return
 	}
 
+	// Requirement 3.3: non-admin callers see only groups they are currently
+	// entitled to (baseline group always, plus any group with an active,
+	// unexpired subscription). Admin callers continue to see the full list
+	// so the operator UI can still list every pricing tier.
+	db := pr.DB.WithContext(c.Request.Context())
 	var groups []model.Group
-	if err := pr.DB.WithContext(c.Request.Context()).Order("id ASC").Find(&groups).Error; err != nil {
-		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
-		return
+	if pr.isAdminCaller(c, bc) {
+		if err := db.Order("id ASC").Find(&groups).Error; err != nil {
+			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
+			return
+		}
+	} else {
+		subQ := pr.DB.Model(&model.Subscription{}).
+			Select("group_id").
+			Where("user_id = ? AND status = ? AND expires_at > ?", bc.UserID, "active", time.Now().UTC())
+		if err := db.
+			Where("rate_multiplier = ? OR id IN (?)", 1.0, subQ).
+			Order("id ASC").
+			Find(&groups).Error; err != nil {
+			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to list groups")
+			return
+		}
 	}
 
 	items := make([]availableGroupItem, 0, len(groups))
@@ -311,6 +326,26 @@ func (pr *PanelRouter) RebindAPIKeyGroupHandler(c *gin.Context) {
 			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to validate group")
 			return
 		}
+
+		// Requirement 3.1 / Property 9: reject rebind to a group the user does
+		// not currently hold an entitlement for. Baseline group is always
+		// entitled; non-baseline groups require an active, unexpired
+		// subscription. The 403 path MUST NOT touch APIKeyCache — Property 9
+		// requires that cache invalidation happens only on successful rebind.
+		ok, err := UserHoldsEntitlement(pr.DB.WithContext(c.Request.Context()), bc.UserID, *req.GroupID)
+		if err != nil {
+			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to validate entitlement")
+			return
+		}
+		if !ok {
+			slog.Info("unentitled_group_bind_rejected",
+				"user_id", bc.UserID,
+				"group_id", *req.GroupID,
+				"api_key_id", key.ID,
+			)
+			Error(c, http.StatusForbidden, apiErrorForbidden, "group_not_entitled")
+			return
+		}
 	}
 
 	if err := pr.DB.WithContext(c.Request.Context()).Model(&key).Update("group_id", req.GroupID).Error; err != nil {
@@ -318,6 +353,13 @@ func (pr *PanelRouter) RebindAPIKeyGroupHandler(c *gin.Context) {
 		return
 	}
 	key.GroupID = req.GroupID
+
+	// After a successful commit, drop the L1 APIKeyCache entry so the next
+	// /v1/* request re-resolves the group binding (and its rate_mult) from
+	// the source of truth. nil-safe: tests may leave APIKeyCache unset.
+	if pr.APIKeyCache != nil {
+		pr.APIKeyCache.Delete(key.KeyHash)
+	}
 
 	Success(c, gin.H{
 		"id":       key.ID,

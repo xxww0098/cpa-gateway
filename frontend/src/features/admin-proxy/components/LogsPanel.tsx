@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { Loader2, RefreshCcw, Trash2, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
-import { fetchMgmtApi } from '../api'
+import { fetchProviderConfig, deleteProviderConfig } from '../api'
 import { Link } from 'react-router-dom'
 
 interface LogsPanelProps {
@@ -19,7 +19,7 @@ export function LogsPanel({ endpoint, allowClear }: LogsPanelProps) {
     setLoading(true)
     setIsDisabled(false)
     try {
-      const data = await fetchMgmtApi(endpoint)
+      const data = await fetchProviderConfig<unknown>(endpoint)
 
       let logsText = ''
       if (typeof data === 'string') {
@@ -46,7 +46,7 @@ export function LogsPanel({ endpoint, allowClear }: LogsPanelProps) {
 
   const handleClear = async () => {
     try {
-      await fetchMgmtApi(endpoint, { method: 'DELETE' })
+      await deleteProviderConfig(endpoint)
       toast.success('已清空日志')
       setLogs('暂无日志内容...')
     } catch (e: unknown) {

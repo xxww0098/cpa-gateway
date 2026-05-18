@@ -2,23 +2,23 @@ import { useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { toast } from 'sonner'
-import { createUser } from '../api'
+import { useCreateUser } from '../hooks'
 import type { CreateUserPayload } from '../types'
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSuccess?: () => void
 }
 
-export function AdminUserCreateDialog({ open, onOpenChange, onSuccess }: Props) {
+export function AdminUserCreateDialog({ open, onOpenChange }: Props) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [role, setRole] = useState('user')
   const [username, setUsername] = useState('')
   const [balance, setBalance] = useState('')
-  const [creating, setCreating] = useState(false)
+
+  const createUser = useCreateUser()
 
   const reset = () => {
     setEmail(''); setPassword(''); setConfirm('')
@@ -29,25 +29,18 @@ export function AdminUserCreateDialog({ open, onOpenChange, onSuccess }: Props) 
     if (!email.trim()) { toast.error('请输入邮箱'); return }
     if (password.length < 8) { toast.error('密码至少8位'); return }
     if (password !== confirm) { toast.error('两次密码不一致'); return }
-    setCreating(true)
-    try {
-      const payload: CreateUserPayload = {
-        email: email.trim(),
-        password,
-        role,
-      }
-      if (username.trim()) payload.username = username.trim()
-      if (balance) payload.balance = parseFloat(balance)
-      await createUser(payload)
-      toast.success('用户创建成功')
-      onOpenChange(false)
-      reset()
-      onSuccess?.()
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : '创建失败')
-    } finally {
-      setCreating(false)
+
+    const payload: CreateUserPayload = {
+      email: email.trim(),
+      password,
+      role,
     }
+    if (username.trim()) payload.username = username.trim()
+    if (balance) payload.balance = parseFloat(balance)
+
+    await createUser.mutateAsync(payload)
+    onOpenChange(false)
+    reset()
   }
 
   return (
@@ -101,8 +94,8 @@ export function AdminUserCreateDialog({ open, onOpenChange, onSuccess }: Props) 
             <DialogPrimitive.Close asChild>
               <button className="btn btn-ghost px-4 text-sm">取消</button>
             </DialogPrimitive.Close>
-            <button className="btn btn-primary px-5 text-sm" onClick={handleCreate} disabled={creating}>
-              {creating ? '创建中...' : '注册用户'}
+            <button className="btn btn-primary px-5 text-sm" onClick={handleCreate} disabled={createUser.isPending}>
+              {createUser.isPending ? '创建中...' : '注册用户'}
             </button>
           </div>
           <DialogPrimitive.Close className="absolute right-4 top-4 rounded-md p-1 opacity-70 hover:opacity-100 transition-opacity">

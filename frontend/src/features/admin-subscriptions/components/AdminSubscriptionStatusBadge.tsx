@@ -1,10 +1,11 @@
+import { memo } from "react"
 import { Badge } from "@/shared/components/ui/badge"
 
 interface Props {
   status: string
 }
 
-export function AdminSubscriptionStatusBadge({ status }: Props) {
+export const AdminSubscriptionStatusBadge = memo(function AdminSubscriptionStatusBadge({ status }: Props) {
   switch (status) {
     case "active":
       return <Badge className="bg-emerald-500 hover:bg-emerald-600 text-white border-transparent">活跃</Badge>
@@ -15,4 +16,4 @@ export function AdminSubscriptionStatusBadge({ status }: Props) {
     default:
       return <Badge variant="outline">{status}</Badge>
   }
-}
+})

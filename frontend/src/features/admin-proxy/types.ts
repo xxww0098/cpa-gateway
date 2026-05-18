@@ -1,21 +1,58 @@
 import type { SDKModelDefinition } from '@/features/pricing/model_prices'
 import type { QuotaResult } from '@/features/usage/quota'
 
+// ── API response/request types ────────────────────────────────────────────
+
+/** Response from GET /auth-files */
+export interface AuthFilesResponse {
+  files?: AuthFileItem[]
+  'auth-files'?: AuthFileItem[]
+  authFiles?: AuthFileItem[]
+}
+
+/** Request body for PATCH /auth-files/status */
+export interface AuthFileStatusRequest {
+  name: string
+  disabled: boolean
+}
+
+/** Response from POST /auth-files (multipart upload) */
+export interface AuthFileUploadResponse {
+  status?: string
+  uploaded?: number
+  failed?: Array<{ name: string; error: string }>
+  [key: string]: unknown
+}
+
 // ── AuthFile types ────────────────────────────────────────────────
 
 export interface AuthFileItem {
   name: string
+  id?: string
+  auth_id?: string
   provider?: string
   type?: string
   size?: string | number
   status?: string
   status_message?: string
   disabled?: boolean
+  runtime_only?: boolean
   success?: number
   failed?: number
   recent_requests?: Array<{ success?: number; failed?: number; start?: string; end?: string }>
   email?: string
   label?: string
+  prefix?: string
+  proxy_url?: string
+  base_url?: string
+  account_id?: string
+  api_key_preview?: string
+  access_token_preview?: string
+  refresh_token_preview?: string
+  has_api_key?: boolean
+  has_access_token?: boolean
+  has_refresh_token?: boolean
+  has_service_account?: boolean
   updated_at?: string
   source_kind?: string
   auth_type?: string
@@ -23,9 +60,24 @@ export interface AuthFileItem {
   authIndex?: string | number
   chatgpt_account_id?: string
   project_id?: string
+  location?: string
   state?: string
   models?: string[]
   [key: string]: unknown
+}
+
+export interface AuthFileEditFields {
+  label?: string
+  prefix?: string
+  proxy_url?: string
+  base_url?: string
+  project_id?: string
+  location?: string
+  api_key?: string
+  access_token?: string
+  refresh_token?: string
+  id_token?: string
+  service_account?: string
 }
 
 export type SmartView = 'all' | 'healthy' | 'warning' | 'disabled'
@@ -45,9 +97,11 @@ export interface AuthFileToolbarProps {
   selectedPausableCount: number
   selectedResumableCount: number
   batchStatusLoading: boolean
+  exportLoading: boolean
   onBatchPause: () => void
   onBatchResume: () => void
   onBatchDelete: () => void
+  onBatchExport: () => void
   onRefresh: () => void
   refreshing: boolean
   onUpload: () => void
@@ -65,8 +119,11 @@ export interface AuthFileTableProps {
   onToggle: (file: AuthFileItem) => void
   onDelete: (file: AuthFileItem) => void
   onDetail: (file: AuthFileItem) => void
+  onEdit: (file: AuthFileItem) => void
+  onDownload: (file: AuthFileItem) => void
   onLoadQuota: (file: AuthFileItem) => void
   quotaLoading: Record<string, boolean>
+  downloadLoading: Record<string, boolean>
   providerBadgeColor: (p?: string) => string
   fmtRelative: (d?: string | null) => string
   stateInfo: (f: AuthFileItem) => { icon: React.ReactNode; label: string; tone: string }

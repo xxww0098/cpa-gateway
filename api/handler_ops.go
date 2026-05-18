@@ -1,8 +1,11 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -140,6 +143,7 @@ func (pr *PanelRouter) RegisterOpsRoutes(rg *gin.RouterGroup) {
 	rg.DELETE("/admin/announcements/:id", pr.AdminDeleteAnnouncementHandler)
 	rg.GET("/admin/orders", pr.AdminListOrdersHandler)
 	rg.GET("/admin/usage-logs", pr.AdminUsageLogsHandler)
+	rg.GET("/admin/audit-logs", pr.AdminListAuditLogsHandler)
 	rg.GET("/admin/redeem-codes", pr.AdminListRedeemCodesHandler)
 	rg.POST("/admin/redeem-codes", pr.AdminCreateRedeemCodesHandler)
 	rg.DELETE("/admin/redeem-codes/:id", pr.AdminDeleteRedeemCodeHandler)
@@ -173,6 +177,15 @@ func (pr *PanelRouter) UserUnreadNotificationsHandler(c *gin.Context) {
 		}
 	}
 	Success(c, gin.H{"unread_count": count})
+}
+
+func generateRedeemCode() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw[:])
+	return "RDM-" + encoded, nil
 }
 
 func (pr *PanelRouter) UserNotificationsHandler(c *gin.Context) {
@@ -232,7 +245,7 @@ func (pr *PanelRouter) UserRedeemHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid redeem code")
 		return
 	}
-	code := strings.TrimSpace(req.Code)
+	code := strings.ToUpper(strings.TrimSpace(req.Code))
 
 	opsStore.mu.Lock()
 	idx := -1
@@ -469,11 +482,21 @@ func (pr *PanelRouter) AdminCreateRedeemCodesHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid payload")
 		return
 	}
+
+	codes := make([]string, 0, req.Count)
+	for i := 0; i < req.Count; i++ {
+		opCode, err := generateRedeemCode()
+		if err != nil {
+			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to generate redeem code")
+			return
+		}
+		codes = append(codes, opCode)
+	}
+
 	opsStore.mu.Lock()
 	defer opsStore.mu.Unlock()
-	for i := 0; i < req.Count; i++ {
+	for _, opCode := range codes {
 		id := opsStore.nextRedeemID
-		opCode := fmt.Sprintf("RDM-%06d", id)
 		opsStore.nextRedeemID++
 		opsStore.redeemCodes = append(opsStore.redeemCodes, redeemCodeRecord{ID: id, Code: opCode, Amount: req.Amount, Status: "unused", CreatedAt: time.Now()})
 	}
@@ -705,7 +728,8 @@ func (pr *PanelRouter) PaymentAlipayCreateHandler(c *gin.Context) {
 }
 
 func (pr *PanelRouter) PaymentAlipayStatusHandler(c *gin.Context) {
-	if _, ok := pr.requireBillingCtx(c); !ok {
+	bc, ok := pr.requireBillingCtx(c)
+	if !ok {
 		return
 	}
 	orderID := strings.TrimSpace(c.Query("order_id"))
@@ -715,6 +739,10 @@ func (pr *PanelRouter) PaymentAlipayStatusHandler(c *gin.Context) {
 	}
 	order, ok := paymentOrderByPublicID(orderID)
 	if !ok || order.Provider != "alipay" {
+		Error(c, http.StatusNotFound, apiErrorNotFound, "order not found")
+		return
+	}
+	if order.UserID != bc.UserID && !pr.isAdminCaller(c, bc) {
 		Error(c, http.StatusNotFound, apiErrorNotFound, "order not found")
 		return
 	}
@@ -744,7 +772,8 @@ func (pr *PanelRouter) PaymentWechatCreateHandler(c *gin.Context) {
 }
 
 func (pr *PanelRouter) PaymentWechatStatusHandler(c *gin.Context) {
-	if _, ok := pr.requireBillingCtx(c); !ok {
+	bc, ok := pr.requireBillingCtx(c)
+	if !ok {
 		return
 	}
 	orderID := strings.TrimSpace(c.Query("order_id"))
@@ -754,6 +783,10 @@ func (pr *PanelRouter) PaymentWechatStatusHandler(c *gin.Context) {
 	}
 	order, ok := paymentOrderByPublicID(orderID)
 	if !ok || order.Provider != "wechat" {
+		Error(c, http.StatusNotFound, apiErrorNotFound, "order not found")
+		return
+	}
+	if order.UserID != bc.UserID && !pr.isAdminCaller(c, bc) {
 		Error(c, http.StatusNotFound, apiErrorNotFound, "order not found")
 		return
 	}
@@ -954,10 +987,84 @@ func (pr *PanelRouter) AdminUpsertPricingModelHandler(c *gin.Context) {
 		Error(c, http.StatusBadRequest, apiErrorBadRequest, "invalid model price payload")
 		return
 	}
-	price := model.ModelPrice{ModelID: strings.TrimSpace(req.ModelID), InputPricePer1M: req.InputPricePer1M, OutputPricePer1M: req.OutputPricePer1M, CachedInputPricePer1M: req.CachedInputPricePer1M, ReasoningPricePer1M: req.ReasoningPricePer1M}
-	if err := pr.DB.WithContext(c.Request.Context()).Where("model_id = ?", price.ModelID).Assign(price).FirstOrCreate(&price).Error; err != nil {
+	modelID := strings.TrimSpace(req.ModelID)
+	// Per Requirement 6.4 / 6.5: reject negative prices on any of the four per-1M fields.
+	// Exactly 0 is a valid price. Rejection must short-circuit before any DB write or
+	// Pricing_Cache.Invalidate call so an invalid payload can never mutate runtime pricing.
+	negativeFields := make([]string, 0, 4)
+	if req.InputPricePer1M < 0 {
+		negativeFields = append(negativeFields, "input_price_per_1m")
+	}
+	if req.OutputPricePer1M < 0 {
+		negativeFields = append(negativeFields, "output_price_per_1m")
+	}
+	if req.CachedInputPricePer1M < 0 {
+		negativeFields = append(negativeFields, "cached_input_price_per_1m")
+	}
+	if req.ReasoningPricePer1M < 0 {
+		negativeFields = append(negativeFields, "reasoning_price_per_1m")
+	}
+	if len(negativeFields) > 0 {
+		slog.Warn("price_validation_failed",
+			"event", "price_validation_failed",
+			"model_id", modelID,
+			"negative_field", negativeFields,
+		)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid_price"})
+		return
+	}
+	price := model.ModelPrice{ModelID: modelID, InputPricePer1M: req.InputPricePer1M, OutputPricePer1M: req.OutputPricePer1M, CachedInputPricePer1M: req.CachedInputPricePer1M, ReasoningPricePer1M: req.ReasoningPricePer1M}
+	// Upsert: try to update the existing row first; if no row exists, create
+	// one. GORM's Assign(...).FirstOrCreate silently drops zero-value fields
+	// on the UPDATE branch (because of ORM's "zero means unset" heuristic),
+	// which violates Requirement 6.4: a value of exactly 0 in any of the
+	// four per-1M fields SHALL be accepted as a valid price. We use
+	// Select(...) + Updates(&struct) to force every named column to be
+	// written regardless of whether it is the zero value.
+	result := pr.DB.WithContext(c.Request.Context()).
+		Model(&model.ModelPrice{}).
+		Where("model_id = ?", modelID).
+		Select("InputPricePer1M", "OutputPricePer1M", "CachedInputPricePer1M", "ReasoningPricePer1M").
+		Updates(price)
+	if result.Error != nil {
 		Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save model price")
 		return
+	}
+	if result.RowsAffected == 0 {
+		// No existing row — create one. Create does not have the zero-value
+		// skip behavior because the zero values are part of the insert's
+		// explicit column list.
+		if err := pr.DB.WithContext(c.Request.Context()).Create(&price).Error; err != nil {
+			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to save model price")
+			return
+		}
+	} else {
+		// Load the committed row so the response echoes the canonical state
+		// (including ID / timestamps) and matches the pre-rewrite contract.
+		if err := pr.DB.WithContext(c.Request.Context()).
+			Where("model_id = ?", modelID).
+			First(&price).Error; err != nil {
+			Error(c, http.StatusInternalServerError, apiErrorInternal, "failed to reload model price")
+			return
+		}
+	}
+	// Refresh the in-memory ModelPriceCache so Pricing_Calculator.Estimate/Compute
+	// observe the new prices without a process restart (Requirement 6.1/6.2/6.3/6.6).
+	// If main.go forgot to wire the cache, log loudly but still return success — this
+	// path is covered by the dedicated wiring smoke test in router_pricecache_wiring_test.go.
+	if pr.PriceCache != nil {
+		if err := pr.PriceCache.Invalidate(pr.DB); err != nil {
+			slog.Warn("pricing_cache_invalidate_failed",
+				"event", "pricing_cache_invalidate_failed",
+				"model_id", modelID,
+				"error", err,
+			)
+		}
+	} else {
+		slog.Warn("pricing_cache_not_wired",
+			"event", "pricing_cache_not_wired",
+			"model_id", modelID,
+		)
 	}
 	Success(c, price)
 }

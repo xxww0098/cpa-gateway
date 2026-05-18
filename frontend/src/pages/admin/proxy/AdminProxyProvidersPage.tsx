@@ -3,8 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/sha
 import { ProviderTab, type BaseChannelItem } from '@/features/admin-proxy/components/ProviderTab'
 import { ProviderModelsDialog } from '@/features/admin-proxy/components/ProviderModelsDialog'
 import { cn } from '@/shared/utils/utils'
-import { fetchMgmtApi } from '@/features/admin-proxy/api'
-import { fetchApi } from '@/shared/api/client'
+import { fetchProviderConfig, updateProviderConfig } from '@/features/admin-proxy/api'
+import { apiClient } from '@/shared/api/client'
 import {
   buildProviderModelsArray,
   normalizeProviderItems,
@@ -32,10 +32,10 @@ async function fetchPersistedModelsUrl(channelKey: string): Promise<string> {
   const key = channelKey.trim()
   if (!key) return ''
   const params = new URLSearchParams({ channel_key: key })
-  const response = await fetchApi(`/admin/model-catalog/models-url?${params.toString()}`) as {
-    data?: { models_url?: string }
-  }
-  return String(response?.data?.models_url || '').trim()
+  const response = await apiClient.get<{
+    models_url?: string
+  }>(`/admin/model-catalog/models-url?${params.toString()}`)
+  return String(response?.models_url || '').trim()
 }
 
 export default function AdminProxyProvidersPage() {
@@ -56,7 +56,7 @@ export default function AdminProxyProvidersPage() {
   const handleOpenModelsDialog = async (item: BaseChannelItem) => {
     let nextItem = item
     try {
-      const latest = await fetchMgmtApi(PROVIDER_ENDPOINTS[item.providerKind])
+      const latest = await fetchProviderConfig(PROVIDER_ENDPOINTS[item.providerKind])
       const fresh = normalizeProviderItems(item.providerKind, latest).find((candidate) =>
         candidate.index === item.index &&
         candidate.keyIndex === item.keyIndex &&
@@ -97,9 +97,9 @@ export default function AdminProxyProvidersPage() {
 
     const providerKind = modelsDialogItem.providerKind
     const endpoint = PROVIDER_ENDPOINTS[providerKind]
-    const latest = await fetchMgmtApi(endpoint)
+    const latest = await fetchProviderConfig(endpoint)
     const updatedArray = buildProviderModelsArray(providerKind, latest, modelsDialogItem, models)
-    await fetchMgmtApi(endpoint, { method: 'PUT', body: JSON.stringify(updatedArray) })
+    await updateProviderConfig(endpoint, updatedArray)
 
     const nextModels = models
       .map((model) => {
@@ -124,10 +124,7 @@ export default function AdminProxyProvidersPage() {
       const modelIds = nextModels.map((m) => (m && typeof m === 'object' && 'name' in m ? String((m as { name: string }).name).trim() : '')).filter(Boolean)
       if (modelIds.length > 0) {
         try {
-          await fetchApi('/admin/model-catalog/ensure-openai-channel', {
-            method: 'POST',
-            body: JSON.stringify({ channel_key: String(modelsDialogItem.name).trim(), model_ids: modelIds }),
-          })
+          await apiClient.post('/admin/model-catalog/ensure-openai-channel', { channel_key: String(modelsDialogItem.name).trim(), model_ids: modelIds })
         } catch {
           /* 登记失败不影响渠道保存；可在渠道列表中开关区域重试 */
         }
@@ -147,10 +144,7 @@ export default function AdminProxyProvidersPage() {
     if (!channelKey) {
       throw new Error('渠道名称不能为空')
     }
-    await fetchApi('/admin/model-catalog/models-url', {
-      method: 'PUT',
-      body: JSON.stringify({ channel_key: channelKey, models_url: modelsUrl }),
-    })
+    await apiClient.put('/admin/model-catalog/models-url', { channel_key: channelKey, models_url: modelsUrl })
 
     setModelsDialogItem((current) => current ? {
       ...current,

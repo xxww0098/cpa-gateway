@@ -1,4 +1,4 @@
-import type { ApiCallRequest, ApiCallResult } from '@/shared/api/request'
+import type { ApiCallRequest, ApiCallResult } from '@/features/admin-proxy/api'
 
 export type AmpcodeUpstreamTestStatus = 'connected' | 'reachable' | 'failed'
 

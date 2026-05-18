@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { FileText, RefreshCw, ChevronLeft, ChevronRight, ArrowDownCircle, ArrowUpCircle, CheckCircle2, XCircle, Info } from 'lucide-react'
 import type { UsageTableProps } from '../types'
 
@@ -26,7 +27,7 @@ function fmtDateTime(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-export function UsageTable({
+export const UsageTable = memo(function UsageTable({
   logs,
   loading,
   total,
@@ -249,4 +250,4 @@ export function UsageTable({
       )}
     </div>
   )
-}
+})

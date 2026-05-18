@@ -147,7 +147,7 @@ func TestAuthenticate_JWT(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	token, err := authutil.GenerateJWT(user.ID, user.Email, testJWTSecret)
+	token, err := authutil.GenerateJWT(user.ID, user.Email, testJWTSecret, 0)
 	if err != nil {
 		t.Fatalf("generate jwt: %v", err)
 	}

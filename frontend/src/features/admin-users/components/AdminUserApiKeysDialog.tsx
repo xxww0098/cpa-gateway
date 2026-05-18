@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import { getUserApiKeys } from '../api'
-import type { UserItem, ManagedApiKey } from '../types'
+import { useUserApiKeys } from '../hooks'
+import type { UserItem } from '../types'
 
 interface Props {
   open: boolean
@@ -15,18 +14,7 @@ function fmtDate(s: string): string {
 }
 
 export function AdminUserApiKeysDialog({ open, onOpenChange, user }: Props) {
-  const [keys, setKeys] = useState<ManagedApiKey[]>([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (open && user) {
-      setLoading(true)
-      getUserApiKeys(user.id)
-        .then(setKeys)
-        .catch(() => setKeys([]))
-        .finally(() => setLoading(false))
-    }
-  }, [open, user])
+  const { data: keys = [], isLoading: loading } = useUserApiKeys(user?.id ?? null, open && user !== null)
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>

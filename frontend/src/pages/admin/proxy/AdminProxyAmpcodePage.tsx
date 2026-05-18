@@ -5,8 +5,8 @@ import { Label } from '@/shared/components/ui/label'
 import { Button } from '@/shared/components/ui/button'
 import { AlertCircle, CheckCircle2, Loader2, PlugZap, XCircle, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { fetchMgmtApi } from '@/features/admin-proxy/api'
-import { apiCallApi } from '@/shared/api/request'
+import { fetchProviderConfig, updateProviderConfig, deleteProviderConfig } from '@/features/admin-proxy/api'
+import { apiCallRequest } from '@/features/admin-proxy/api'
 import { Input } from '@/shared/components/ui/input'
 import { Textarea } from '@/shared/components/ui/textarea'
 import { testAmpcodeUpstream, type AmpcodeUpstreamTestResult } from '@/features/admin-proxy/ampcodeUpstreamTest'
@@ -42,7 +42,7 @@ export default function AdminProxyAmpcodePage() {
   const fetchAll = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await fetchMgmtApi('/ampcode')
+      const data = await fetchProviderConfig<Record<string, unknown>>('/ampcode')
       const ampConfig = extractAmpcodeConfig(data)
       const upstreamUrlValue = ampConfig['upstream-url'] ?? ampConfig.upstream_url
       const upstreamApiKeyValue = ampConfig['upstream-api-key'] ?? ampConfig.upstream_api_key
@@ -51,12 +51,12 @@ export default function AdminProxyAmpcodePage() {
       setUpstreamApiKey(typeof upstreamApiKeyValue === 'string' ? upstreamApiKeyValue : '')
       setForceModelMappings(typeof forceModelMappingsValue === 'boolean' ? forceModelMappingsValue : false)
 
-      const mappingRes = await fetchMgmtApi('/ampcode/model-mappings')
+      const mappingRes = await fetchProviderConfig<Record<string, unknown>>('/ampcode/model-mappings')
       const mm = mappingRes['model-mappings'] || mappingRes.mappings || ampConfig['model-mappings'] || []
       setModelMappings(normalizeAmpModelMappings(mm))
 
-      const upstreamKeysRes = await fetchMgmtApi('/ampcode/upstream-api-keys')
-      setUpstreamKeyEntries(normalizeAmpUpstreamAPIKeyEntries(upstreamKeysRes['upstream-api-keys'] || []))
+      const upstreamKeysRes = await fetchProviderConfig<Record<string, unknown>>('/ampcode/upstream-api-keys')
+      setUpstreamKeyEntries(normalizeAmpUpstreamAPIKeyEntries((upstreamKeysRes['upstream-api-keys'] || []) as AmpUpstreamAPIKeyEntry[]))
     } catch (e: unknown) {
       toast.error(`读取数据失败: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -80,10 +80,11 @@ export default function AdminProxyAmpcodePage() {
     ) => {
       setTogglesLoading(prev => ({ ...prev, [key]: true }))
       try {
-        const method = isDelete ? 'DELETE' : 'PUT'
-        const body = isDelete ? undefined : JSON.stringify({ value: val })
-
-        await fetchMgmtApi(endpoint, { method, body })
+        if (isDelete) {
+          await deleteProviderConfig(endpoint)
+        } else {
+          await updateProviderConfig(endpoint, { value: val })
+        }
         if (!options?.silent) {
           toast.success('配置已更新')
         }
@@ -116,10 +117,7 @@ export default function AdminProxyAmpcodePage() {
   const handleSaveMappings = async () => {
     setTogglesLoading(prev => ({ ...prev, mappings: true }))
     try {
-      await fetchMgmtApi('/ampcode/model-mappings', {
-        method: 'PUT',
-        body: JSON.stringify(buildAmpModelMappingsPutPayload(modelMappings)),
-      })
+      await updateProviderConfig('/ampcode/model-mappings', buildAmpModelMappingsPutPayload(modelMappings))
       setModelMappings(prev => normalizeAmpModelMappings(prev).filter(entry => entry.from && entry.to))
       toast.success('模型映射已更新')
     } catch (e: unknown) {
@@ -166,10 +164,7 @@ export default function AdminProxyAmpcodePage() {
   const updateAmpUpstreamKeyEntries = async (entries: AmpUpstreamAPIKeyEntry[]) => {
     setTogglesLoading(prev => ({ ...prev, upstreamKeyEntries: true }))
     try {
-      await fetchMgmtApi('/ampcode/upstream-api-keys', {
-        method: 'PUT',
-        body: JSON.stringify(buildAmpUpstreamAPIKeysPutPayload(entries)),
-      })
+      await updateProviderConfig('/ampcode/upstream-api-keys', buildAmpUpstreamAPIKeysPutPayload(entries))
       setUpstreamKeyEntries(entries)
       toast.success('上游 Key 映射已更新')
     } catch (e: unknown) {
@@ -183,10 +178,7 @@ export default function AdminProxyAmpcodePage() {
   const handleDeleteUpstreamKeyMapping = async (upstreamKey: string) => {
     setTogglesLoading(prev => ({ ...prev, upstreamKeyEntries: true }))
     try {
-      await fetchMgmtApi('/ampcode/upstream-api-keys', {
-        method: 'DELETE',
-        body: JSON.stringify(buildAmpUpstreamAPIKeysDeletePayload([upstreamKey])),
-      })
+      await deleteProviderConfig('/ampcode/upstream-api-keys', buildAmpUpstreamAPIKeysDeletePayload([upstreamKey]))
       setUpstreamKeyEntries(prev => prev.filter(item => item['upstream-api-key'] !== upstreamKey))
       toast.success('映射已删除')
     } catch (e: unknown) {
@@ -210,7 +202,7 @@ export default function AdminProxyAmpcodePage() {
     setTestingUpstream(true)
     setUpstreamTestResult(null)
     try {
-      const result = await testAmpcodeUpstream({ upstreamUrl, upstreamApiKey }, apiCallApi.request)
+      const result = await testAmpcodeUpstream({ upstreamUrl, upstreamApiKey }, apiCallRequest)
       setUpstreamTestResult(result)
 
       if (result.status === 'connected') {

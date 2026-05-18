@@ -1,3 +1,4 @@
+import { memo } from "react"
 import { Button } from "@/shared/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/components/ui/table"
 import { Card } from "@/shared/components/ui/card"
@@ -28,7 +29,7 @@ interface Props {
   onReactivate: (id: number) => void
 }
 
-export function AdminSubscriptionsTable({
+export const AdminSubscriptionsTable = memo(function AdminSubscriptionsTable({
   subs,
   loading,
   page,
@@ -192,4 +193,4 @@ export function AdminSubscriptionsTable({
       )}
     </Card>
   )
-}
+})
